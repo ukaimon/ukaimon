@@ -1,0 +1,19 @@
+{
+  "watch_folder": "idsサンプル",
+  "output_folder": "data",
+  "target_extensions": [
+    ".ids"
+  ],
+  "parser_type": "ivium_ids",
+  "representative_cycle_rule": "Cycle1",
+  "baseline_correction": true,
+  "plot_enabled": true,
+  "autosave_excel": true,
+  "mean_voltammogram_enabled": true,
+  "mean_voltammogram_include_flags": [
+    "valid"
+  ],
+  "interpolation_enabled": true,
+  "interpolation_points": 400,
+  "interpolation_method": "linear"
+}
