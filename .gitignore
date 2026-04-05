@@ -4,8 +4,10 @@ __pycache__/
 venv/
 logs/
 *.log
+*.ids
 *.sqlite3
 *.db
+database/*.db
 
 data/sessions/*/raw/
 data/sessions/*/processed/
@@ -14,3 +16,4 @@ data/sessions/*/exports/
 data/sessions/*/report/
 
 data/cross_reports/
+config/local_config.json
