@@ -1,0 +1,75 @@
+# 電気化学実験データ管理 GUI
+
+IviumSoft の `.ids` を中心に、MIP、MIP 使用記録、測定セッション、濃度条件、バッチ実行計画、測定、解析、平均ボルタモグラム、横断比較、レポート出力を一元管理する Windows 向け Python アプリです。
+
+## 特徴
+
+- `.ids` 専用 parser を実装
+- SQLite を主データベースとして採用
+- tkinter ベースの日本語 GUI
+- Batch 実行計画を中心に `.ids` 自動紐付け
+- CV / DPV 解析の初版を実装
+- 条件単位の平均ボルタモグラム出力
+- CSV / Excel / PNG / Markdown 出力
+- 実験データ、出力、DB、`.venv` を Git 管理から除外
+
+## ディレクトリ構成
+
+```text
+app.py
+requirements.txt
+README.md
+.gitignore
+gui/
+core/
+parsers/
+analysis/
+export/
+utils/
+tests/
+config/
+database/
+data/
+docs/
+```
+
+## セットアップ
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python app.py
+```
+
+## 最小動作版でできること
+
+1. MIP / MIP 使用記録 / セッション / 条件の登録
+2. バッチ実行計画の生成
+3. 手動測定の登録
+4. `.ids` の単体取り込みと監視取り込み
+5. `.ids` からの測定条件抽出
+6. CV / DPV の基本解析
+7. 条件集計と平均ボルタモグラム出力
+8. セッション Excel / CSV / Markdown 出力
+9. 横断検索と横断 CSV 出力
+
+## 拡張版として入れてある要素
+
+- MIP / 使用記録 / セッション / 条件の複製
+- `.ids` 監視タブ
+- 横断比較タブ
+- レポート出力タブ
+- 平均ボルタモグラム出力導線
+
+## テスト
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+## 補足
+
+- `.ids` サンプルは `idsサンプル/` を既定の監視先に設定しています。
+- ローカル設定は `config/local_config.json` に上書き保存できます。
+- 本番 DB は `database/` 配下に作成されますが `.gitignore` により追跡されません。
