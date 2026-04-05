@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/
+*.log
+*.sqlite3
+*.db
+
+data/sessions/*/raw/
+data/sessions/*/processed/
+data/sessions/*/plots/
+data/sessions/*/exports/
+data/sessions/*/report/
+
+data/cross_reports/
