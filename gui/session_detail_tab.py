@@ -29,7 +29,7 @@ class SessionDetailTab(ttk.Frame):
         tables = ttk.Frame(self)
         tables.pack(fill="both", expand=True, padx=12, pady=12)
 
-        self.condition_columns = ("condition_id", "concentration_value", "method", "actual_replicates", "n_valid", "n_invalid", "condition_status")
+        self.condition_columns = ("condition_id", "concentration_value", "method", "actual_replicates", "n_valid", "n_invalid", "condition_status", "warning")
         self.condition_tree = ttk.Treeview(
             tables,
             columns=self.condition_columns,
@@ -38,10 +38,10 @@ class SessionDetailTab(ttk.Frame):
         )
         for column, heading in zip(
             self.condition_columns,
-            ("条件 ID", "濃度", "測定法", "実測", "valid", "invalid", "状態"),
+            ("条件 ID", "濃度", "測定法", "実測", "valid", "invalid", "状態", "差分"),
         ):
             self.condition_tree.heading(column, text=heading)
-            self.condition_tree.column(column, width=120)
+            self.condition_tree.column(column, width=110 if column != "warning" else 200)
         self.condition_tree.pack(fill="x", pady=(0, 12))
         self.condition_tree.bind("<Double-1>", self._handle_condition_double_click)
 
@@ -111,6 +111,7 @@ class SessionDetailTab(ttk.Frame):
         self.summary_var.set(
             f"{session['session_date']} / {session['session_name']} / 測定対象物質={session['analyte']} / 測定法={session.get('method_default', '')}"
         )
+        condition_warnings = detail.get("condition_warnings", {})
 
         for tree in (self.condition_tree, self.measurement_tree):
             for item in tree.get_children():
@@ -128,6 +129,7 @@ class SessionDetailTab(ttk.Frame):
                     row.get("n_valid", 0),
                     row.get("n_invalid", 0),
                     row.get("condition_status", ""),
+                    condition_warnings.get(str(row["condition_id"]), ""),
                 ),
             )
         for row in detail["measurements"]:

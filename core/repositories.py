@@ -187,6 +187,21 @@ class ElectrochemRepository:
         sql += f" ORDER BY {order_by}"
         return self.database.fetch_all(sql, params)
 
+    def list_deleted_records(
+        self,
+        table_name: str,
+        order_by: str = "deleted_at DESC, updated_at DESC",
+        where_clause: str | None = None,
+        params: tuple[Any, ...] = (),
+    ) -> list[dict[str, Any]]:
+        if not self._supports_soft_delete(table_name):
+            return []
+        sql = f"SELECT * FROM {table_name} WHERE COALESCE(is_deleted, 0) = 1"
+        if where_clause:
+            sql += f" AND ({where_clause})"
+        sql += f" ORDER BY {order_by}"
+        return self.database.fetch_all(sql, params)
+
     def get_latest_operator(self, table_name: str) -> str:
         conditions: list[str] = ["COALESCE(TRIM(operator), '') <> ''"]
         if self._supports_soft_delete(table_name):
@@ -302,6 +317,48 @@ class ElectrochemRepository:
         if assigned_measurement_id is not None:
             payload["assigned_measurement_id"] = assigned_measurement_id
         self.update_record("batch_plan_items", batch_item_id, payload)
+
+    def restore_record(self, table_name: str, record_id: str) -> None:
+        if not self._supports_soft_delete(table_name):
+            raise ValueError(f"{table_name} は復元に対応していません。")
+        self.update_record(
+            table_name,
+            record_id,
+            {
+                "is_deleted": 0,
+                "deleted_at": None,
+            },
+        )
+
+    def bulk_restore_records(self, table_name: str, where_clause: str, params: tuple[Any, ...]) -> None:
+        if not self._supports_soft_delete(table_name):
+            raise ValueError(f"{table_name} は復元に対応していません。")
+        self.database.execute(
+            f"""
+            UPDATE {table_name}
+            SET is_deleted = 0,
+                deleted_at = NULL,
+                updated_at = ?
+            WHERE {where_clause}
+              AND COALESCE(is_deleted, 0) = 1
+            """,
+            (now_iso(), *params),
+        )
+
+    def get_active_batch_item(self, batch_item_id: str) -> dict[str, Any] | None:
+        return self.database.fetch_one(
+            f"""
+            SELECT b.*
+            FROM batch_plan_items AS b
+            INNER JOIN sessions AS s ON s.session_id = b.session_id
+            INNER JOIN conditions AS c ON c.condition_id = b.condition_id
+            WHERE b.batch_item_id = ?
+              AND {self._active_clause("batch_plan_items", "b")}
+              AND {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
+            """,
+            (batch_item_id,),
+        )
 
     def replace_cycle_results(self, measurement_id: str, cycle_rows: list[dict[str, Any]]) -> None:
         self.database.delete("cycle_results", "measurement_id = ?", (measurement_id,))

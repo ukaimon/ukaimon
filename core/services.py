@@ -29,6 +29,29 @@ from utils.file_utils import ensure_directories, generate_condition_id, generate
 
 LOGGER = logging.getLogger(__name__)
 
+RESTORABLE_RECORD_TYPES = {
+    "mip": "mip_records",
+    "session": "sessions",
+    "condition": "conditions",
+    "measurement": "measurements",
+}
+
+CONDITION_WARNING_FIELDS = {
+    "method": "method",
+    "potential_start_v": "start",
+    "potential_end_v": "end",
+    "potential_vertex_1_v": "v1",
+    "potential_vertex_2_v": "v2",
+    "scan_rate_v_s": "scan_rate",
+    "step_v": "step",
+    "pulse_amplitude_v": "amplitude",
+    "pulse_time_s": "pulse_time",
+    "quiet_time_s": "quiet_time",
+    "cycles": "cycles",
+    "current_range": "range",
+    "filter_setting": "filter",
+}
+
 
 class AppServices:
     def __init__(
@@ -61,6 +84,36 @@ class AppServices:
         self.repository.initialize()
         self.repository.normalize_legacy_condition_ids()
 
+    @staticmethod
+    def _normalize_warning_value(value: Any) -> str:
+        if value in (None, ""):
+            return "(blank)"
+        if isinstance(value, float):
+            return f"{value:.9g}"
+        return str(value).strip()
+
+    def _get_import_target(self, session_id: str | None = None, batch_item_id: str | None = None) -> dict[str, Any]:
+        if batch_item_id:
+            batch_item = self.repository.get_active_batch_item(batch_item_id)
+            if not batch_item:
+                raise ValueError("指定したバッチ項目が見つかりません。")
+            assigned_measurement_id = str(batch_item.get("assigned_measurement_id") or "").strip()
+            if assigned_measurement_id:
+                raise ValueError("指定したバッチ項目にはすでに測定が紐付いています。")
+            return {
+                "batch_item_id": str(batch_item["batch_item_id"]),
+                "session_id": str(batch_item["session_id"]),
+                "condition_id": str(batch_item["condition_id"]),
+                "rep_no": int(batch_item["rep_no"]),
+            }
+        decision = self.batch_linker.choose_target(session_id)
+        return {
+            "batch_item_id": decision.batch_item_id,
+            "session_id": decision.session_id,
+            "condition_id": decision.condition_id,
+            "rep_no": decision.rep_no,
+        }
+
     def list_mips(self) -> list[dict[str, Any]]:
         return self.repository.list_records("mip_records", "preparation_date DESC, created_at DESC")
 
@@ -85,6 +138,66 @@ class AppServices:
 
     def list_measurements(self, session_id: str | None = None) -> list[dict[str, Any]]:
         return self.repository.list_active_measurements(session_id)
+
+    def list_deleted_records(self, record_type: str) -> list[dict[str, Any]]:
+        table_name = RESTORABLE_RECORD_TYPES.get(record_type)
+        if not table_name:
+            return []
+        rows = self.repository.list_deleted_records(table_name)
+        deleted_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if record_type == "mip":
+                summary = f"{row.get('template_name', '')} / {row.get('preparation_date', '')}"
+                record_id = str(row["mip_id"])
+            elif record_type == "session":
+                summary = f"{row.get('session_date', '')} / {row.get('analyte', '')}"
+                record_id = str(row["session_id"])
+            elif record_type == "condition":
+                summary = f"{row.get('concentration_value', '')} {row.get('concentration_unit', '')} / {row.get('method', '')}"
+                record_id = str(row["condition_id"])
+            else:
+                summary = f"{row.get('condition_id', '')} / rep{row.get('rep_no', '')}"
+                record_id = str(row["measurement_id"])
+            deleted_rows.append(
+                {
+                    "record_id": record_id,
+                    "summary": summary,
+                    "deleted_at": str(row.get("deleted_at", "")),
+                }
+            )
+        return deleted_rows
+
+    def list_relink_measurements(self) -> list[dict[str, Any]]:
+        return self.repository.database.fetch_all(
+            """
+            SELECT measurement_id, session_id, condition_id, rep_no, raw_file_path, measured_at
+            FROM measurements
+            WHERE COALESCE(is_deleted, 0) = 0
+              AND COALESCE(raw_file_path, '') <> ''
+            ORDER BY measured_at DESC, created_at DESC
+            LIMIT 100
+            """
+        )
+
+    def list_relink_batch_items(self) -> list[dict[str, Any]]:
+        return self.repository.database.fetch_all(
+            """
+            SELECT batch_item_id, session_id, condition_id, rep_no, planned_status
+            FROM batch_plan_items
+            WHERE COALESCE(is_deleted, 0) = 0
+              AND COALESCE(assigned_measurement_id, '') = ''
+            ORDER BY
+              CASE planned_status
+                WHEN 'waiting' THEN 0
+                WHEN 'relink_needed' THEN 1
+                WHEN 'failed' THEN 2
+                ELSE 3
+              END,
+              planned_order ASC,
+              created_at ASC
+            LIMIT 200
+            """
+        )
 
     def home_snapshot(self) -> dict[str, Any]:
         return self.repository.get_home_snapshot()
@@ -415,16 +528,222 @@ class AppServices:
                 self.generate_mean_voltammograms(session_id, condition_id)
         return message
 
+    def restore_deleted_record(self, record_type: str, record_id: str) -> str:
+        if record_type == "mip":
+            row = self.repository.get_record("mip_records", record_id)
+            if not row or int(row.get("is_deleted", 0)) == 0:
+                raise ValueError("復元対象の MIP が見つかりません。")
+            self.repository.restore_record("mip_records", record_id)
+            self.repository.bulk_restore_records("mip_usage_records", "mip_id = ?", (record_id,))
+            self.repository.bulk_restore_records(
+                "sessions",
+                "mip_usage_id IN (SELECT mip_usage_id FROM mip_usage_records WHERE mip_id = ?)",
+                (record_id,),
+            )
+            self.repository.bulk_restore_records(
+                "conditions",
+                "session_id IN (SELECT session_id FROM sessions WHERE mip_usage_id IN (SELECT mip_usage_id FROM mip_usage_records WHERE mip_id = ?))",
+                (record_id,),
+            )
+            for session in self.list_sessions():
+                if session.get("mip_usage_id") in {
+                    usage["mip_usage_id"] for usage in self.list_mip_usages() if usage.get("mip_id") == record_id
+                }:
+                    self.aggregate_session(str(session["session_id"]))
+            return "MIP と関連データを復元しました。"
+
+        if record_type == "session":
+            row = self.repository.get_record("sessions", record_id)
+            if not row or int(row.get("is_deleted", 0)) == 0:
+                raise ValueError("復元対象のセッションが見つかりません。")
+            usage = self.repository.get_record("mip_usage_records", str(row["mip_usage_id"]))
+            if not usage or int(usage.get("is_deleted", 0)) == 1:
+                raise ValueError("先に関連する MIP または使用記録を復元してください。")
+            self.repository.restore_record("sessions", record_id)
+            self.repository.bulk_restore_records("conditions", "session_id = ?", (record_id,))
+            self.repository.refresh_condition_stats(session_id=record_id)
+            self.aggregate_session(record_id)
+            return "セッションと条件を復元しました。"
+
+        if record_type == "condition":
+            row = self.repository.get_record("conditions", record_id)
+            if not row or int(row.get("is_deleted", 0)) == 0:
+                raise ValueError("復元対象の条件が見つかりません。")
+            session = self.repository.get_record("sessions", str(row["session_id"]))
+            if not session or int(session.get("is_deleted", 0)) == 1:
+                raise ValueError("先に関連セッションを復元してください。")
+            self.repository.restore_record("conditions", record_id)
+            self.repository.refresh_condition_stats(condition_id=record_id)
+            self.aggregate_session(str(row["session_id"]))
+            return "条件を復元しました。"
+
+        if record_type == "measurement":
+            row = self.repository.get_record("measurements", record_id)
+            if not row or int(row.get("is_deleted", 0)) == 0:
+                raise ValueError("復元対象の測定が見つかりません。")
+            session = self.repository.get_record("sessions", str(row["session_id"]))
+            condition = self.repository.get_record("conditions", str(row["condition_id"]))
+            if not session or int(session.get("is_deleted", 0)) == 1:
+                raise ValueError("先に関連セッションを復元してください。")
+            if not condition or int(condition.get("is_deleted", 0)) == 1:
+                raise ValueError("先に関連条件を復元してください。")
+            batch_item_id = str(row.get("batch_item_id") or "").strip()
+            if batch_item_id:
+                batch_item = self.repository.get_record("batch_plan_items", batch_item_id)
+                if batch_item and int(batch_item.get("is_deleted", 0) or 0) == 0:
+                    assigned_measurement_id = str(batch_item.get("assigned_measurement_id") or "").strip()
+                    if assigned_measurement_id and assigned_measurement_id != record_id:
+                        raise ValueError("関連バッチ項目に別の測定が紐付いているため復元できません。")
+            self.repository.restore_record("measurements", record_id)
+            if batch_item_id:
+                batch_item = self.repository.get_record("batch_plan_items", batch_item_id)
+                if batch_item and int(batch_item.get("is_deleted", 0) or 0) == 0:
+                    self.repository.update_batch_item_status(
+                        batch_item_id,
+                        PlannedStatus.COMPLETED.value,
+                        assigned_measurement_id=record_id,
+                    )
+            self.repository.refresh_condition_stats(condition_id=str(row["condition_id"]))
+            self.aggregate_session(str(row["session_id"]))
+            if self.config.mean_voltammogram_enabled:
+                self.generate_mean_voltammograms(str(row["session_id"]), str(row["condition_id"]))
+            return "測定を復元しました。"
+
+        raise ValueError("未対応の復元種別です。")
+
+    def relink_measurement(self, measurement_id: str, batch_item_id: str) -> str:
+        measurement = self.repository.get_record("measurements", measurement_id)
+        if not measurement or int(measurement.get("is_deleted", 0)) == 1:
+            raise ValueError("再リンク対象の測定が見つかりません。")
+        target_batch = self.repository.get_active_batch_item(batch_item_id)
+        if not target_batch:
+            raise ValueError("移動先のバッチ項目が見つかりません。")
+        assigned_measurement_id = str(target_batch.get("assigned_measurement_id") or "").strip()
+        if assigned_measurement_id and assigned_measurement_id != measurement_id:
+            raise ValueError("移動先バッチ項目には別の測定が紐付いています。")
+
+        old_batch_item_id = str(measurement.get("batch_item_id") or "").strip()
+        old_condition_id = str(measurement["condition_id"])
+        old_session_id = str(measurement["session_id"])
+        session_row = self.repository.get_record("sessions", str(target_batch["session_id"]))
+        if not session_row:
+            raise ValueError("移動先セッションが見つかりません。")
+
+        self.repository.update_record(
+            "measurements",
+            measurement_id,
+            {
+                "batch_item_id": str(target_batch["batch_item_id"]),
+                "condition_id": str(target_batch["condition_id"]),
+                "session_id": str(target_batch["session_id"]),
+                "mip_usage_id": session_row.get("mip_usage_id"),
+                "rep_no": int(target_batch["rep_no"]),
+                "link_status": PlannedStatus.COMPLETED.value,
+            },
+        )
+        self.repository.database.execute(
+            """
+            UPDATE analysis_results
+            SET condition_id = ?, session_id = ?
+            WHERE measurement_id = ?
+            """,
+            (target_batch["condition_id"], target_batch["session_id"], measurement_id),
+        )
+
+        if old_batch_item_id and old_batch_item_id != batch_item_id:
+            self.repository.update_record(
+                "batch_plan_items",
+                old_batch_item_id,
+                {
+                    "planned_status": PlannedStatus.WAITING.value,
+                    "assigned_measurement_id": None,
+                },
+            )
+        self.repository.update_batch_item_status(
+            str(target_batch["batch_item_id"]),
+            PlannedStatus.COMPLETED.value,
+            assigned_measurement_id=measurement_id,
+        )
+
+        affected_condition_ids = {old_condition_id, str(target_batch["condition_id"])}
+        affected_session_ids = {old_session_id, str(target_batch["session_id"])}
+        for condition_id in affected_condition_ids:
+            self.repository.refresh_condition_stats(condition_id=condition_id)
+        for session_id in affected_session_ids:
+            session = self.repository.get_record("sessions", session_id)
+            if session and int(session.get("is_deleted", 0)) == 0:
+                self.aggregate_session(session_id)
+                if self.config.mean_voltammogram_enabled:
+                    self.generate_mean_voltammograms(session_id)
+        return f"{measurement_id} を {batch_item_id} に再リンクしました。"
+
+    def get_condition_warnings(self, session_id: str) -> dict[str, str]:
+        rows = self.repository.database.fetch_all(
+            """
+            SELECT
+                m.condition_id,
+                m.measurement_id,
+                mc.method,
+                mc.potential_start_v,
+                mc.potential_end_v,
+                mc.potential_vertex_1_v,
+                mc.potential_vertex_2_v,
+                mc.scan_rate_v_s,
+                mc.step_v,
+                mc.pulse_amplitude_v,
+                mc.pulse_time_s,
+                mc.quiet_time_s,
+                mc.cycles,
+                mc.current_range,
+                mc.filter_setting
+            FROM measurements AS m
+            LEFT JOIN measurement_conditions AS mc ON m.measurement_id = mc.measurement_id
+            INNER JOIN conditions AS c ON c.condition_id = m.condition_id
+            INNER JOIN sessions AS s ON s.session_id = m.session_id
+            WHERE m.session_id = ?
+              AND COALESCE(m.is_deleted, 0) = 0
+              AND COALESCE(c.is_deleted, 0) = 0
+              AND COALESCE(s.is_deleted, 0) = 0
+            ORDER BY m.condition_id ASC, m.rep_no ASC
+            """,
+            (session_id,),
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["condition_id"]), []).append(row)
+
+        warnings: dict[str, str] = {}
+        for condition_id, condition_rows in grouped.items():
+            differing_fields: list[str] = []
+            for field_name, label in CONDITION_WARNING_FIELDS.items():
+                normalized_values = {
+                    self._normalize_warning_value(row.get(field_name))
+                    for row in condition_rows
+                }
+                if len(normalized_values) > 1:
+                    differing_fields.append(label)
+            if differing_fields:
+                preview = ", ".join(differing_fields[:3])
+                if len(differing_fields) > 3:
+                    preview += f" +{len(differing_fields) - 3}"
+                warnings[condition_id] = preview
+        return warnings
+
     def _analyze_parsed_data(self, dataframe: pd.DataFrame, method: str):
         normalized_method = method.lower()
         if "dpv" in normalized_method:
             return "DPV", analyze_dpv_curve(dataframe, baseline_correction=self.config.baseline_correction)
         return "CV", analyze_cv_curve(dataframe, representative_cycle_rule=self.config.representative_cycle_rule)
 
-    def import_ids_file(self, file_path: str | Path, session_id: str | None = None) -> str:
+    def import_ids_file(
+        self,
+        file_path: str | Path,
+        session_id: str | None = None,
+        batch_item_id: str | None = None,
+    ) -> str:
         parsed = parse_ids_file(file_path)
-        decision = self.batch_linker.choose_target(session_id)
-        session_row = self.repository.get_record("sessions", decision.session_id)
+        decision = self._get_import_target(session_id, batch_item_id)
+        session_row = self.repository.get_record("sessions", decision["session_id"])
         if not session_row:
             raise ValueError("紐付け先セッションが見つかりません。")
 
@@ -434,19 +753,19 @@ class AppServices:
         )
         auto_quality = derive_auto_quality(status=str(parsed.metadata.get("endcondition")), analysis_quality=analysis_result.quality_flag)
         measurement_payload = self.batch_linker.build_measurement_payload(
-            session_id=decision.session_id,
-            condition_id=decision.condition_id,
+            session_id=decision["session_id"],
+            condition_id=decision["condition_id"],
             mip_usage_id=session_row.get("mip_usage_id"),
             raw_file_path=str(Path(file_path).resolve()),
-            batch_item_id=decision.batch_item_id,
-            rep_no=decision.rep_no,
+            batch_item_id=decision["batch_item_id"],
+            rep_no=decision["rep_no"],
             measured_at=str(parsed.metadata.get("starttime_iso", now_iso())),
             auto_quality_flag=auto_quality.value,
         )
         measurement_id = str(measurement_payload["measurement_id"])
         self.repository.insert_record("measurements", measurement_payload)
         self.repository.update_batch_item_status(
-            decision.batch_item_id,
+            decision["batch_item_id"],
             PlannedStatus.COMPLETED.value,
             assigned_measurement_id=measurement_id,
         )
@@ -465,8 +784,8 @@ class AppServices:
             {
                 "result_id": generate_id("ARES"),
                 "measurement_id": measurement_id,
-                "condition_id": decision.condition_id,
-                "session_id": decision.session_id,
+                "condition_id": decision["condition_id"],
+                "session_id": decision["session_id"],
                 "representative_current_a": analysis_result.representative_current_a,
                 "representative_potential_v": analysis_result.representative_potential_v,
                 "oxidation_peak_current_a": analysis_result.oxidation_peak_current_a,
@@ -509,16 +828,16 @@ class AppServices:
             },
         )
         if self.config.plot_enabled:
-            directories = session_output_directories(self.root_path, decision.session_id)
+            directories = session_output_directories(self.root_path, decision["session_id"])
             save_measurement_plot(
                 parsed.data,
                 directories["plots"] / f"{measurement_id}.png",
-                f"{decision.session_id} / {measurement_id}",
+                f"{decision['session_id']} / {measurement_id}",
             )
-        self.repository.refresh_condition_stats(condition_id=decision.condition_id)
-        self.aggregate_session(decision.session_id)
+        self.repository.refresh_condition_stats(condition_id=decision["condition_id"])
+        self.aggregate_session(decision["session_id"])
         if self.config.mean_voltammogram_enabled:
-            self.generate_mean_voltammograms(decision.session_id, decision.condition_id)
+            self.generate_mean_voltammograms(decision["session_id"], decision["condition_id"])
         return measurement_id
 
     def reanalyze_measurement(self, measurement_id: str) -> None:
@@ -560,6 +879,7 @@ class AppServices:
         mip_usage = self.repository.get_record("mip_usage_records", session["mip_usage_id"])
         mip_id = mip_usage["mip_id"] if mip_usage else None
         aggregates: list[dict[str, Any]] = []
+        condition_warnings = self.get_condition_warnings(session_id)
         for condition in self.list_conditions(session_id):
             measurement_rows = self.repository.list_active_measurements(session_id)
             measurement_rows = [row for row in measurement_rows if row["condition_id"] == condition["condition_id"]]
@@ -583,6 +903,7 @@ class AppServices:
                 analysis_rows=analysis_rows,
             )
             aggregate["aggregate_id"] = generate_id("AGG")
+            aggregate["note"] = condition_warnings.get(str(condition["condition_id"]), "")
             aggregates.append(aggregate)
         self.repository.replace_aggregated_results(session_id, aggregates)
         self.repository.refresh_condition_stats(session_id=session_id)
@@ -708,7 +1029,9 @@ class AppServices:
         return str(output_path)
 
     def get_session_detail(self, session_id: str) -> dict[str, Any]:
-        return self.repository.get_session_bundle(session_id)
+        bundle = self.repository.get_session_bundle(session_id)
+        bundle["condition_warnings"] = self.get_condition_warnings(session_id)
+        return bundle
 
     def start_watcher(self, callback: Callable[[str], None]) -> None:
         self.stop_watcher()

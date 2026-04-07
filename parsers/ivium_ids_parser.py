@@ -6,54 +6,92 @@ import pandas as pd
 
 from core.models import ParsedMeasurementData
 from parsers.measurement_conditions_parser import parse_header_key_values
-from parsers.parser_utils import collect_numeric_block, detect_standard_columns, parse_numeric_row, read_ids_lines, to_dataframe
+from parsers.parser_utils import (
+    collect_numeric_block,
+    detect_standard_columns,
+    is_primary_data_marker,
+    parse_column_header,
+    parse_numeric_row,
+    read_ids_lines,
+    to_dataframe,
+)
 
 
-def _locate_count_and_data_start(lines: list[str], primary_index: int) -> tuple[int | None, int]:
-    candidate_integers: list[tuple[int, int]] = []
-    first_numeric_row_index: int | None = None
-    for index in range(primary_index + 1, min(primary_index + 8, len(lines))):
+def _locate_count_and_data_start(lines: list[str], marker_index: int) -> tuple[int | None, int]:
+    candidate_count: int | None = None
+    for index in range(marker_index + 1, min(marker_index + 12, len(lines))):
         line = lines[index].strip()
         if not line:
             continue
         parsed_numeric = parse_numeric_row(line)
         if parsed_numeric is not None:
-            first_numeric_row_index = index
-            break
+            return candidate_count, index
         if line.isdigit():
-            candidate_integers.append((index, int(line)))
+            candidate_count = int(line)
+            continue
+        column_names = parse_column_header(line)
+        if column_names and index + 1 < len(lines) and parse_numeric_row(lines[index + 1]) is not None:
+            return candidate_count, index + 1
+    return candidate_count, marker_index + 1
 
-    if first_numeric_row_index is None:
-        return None, primary_index + 1
 
-    count_value = None
-    for index, value in candidate_integers:
-        if index < first_numeric_row_index:
-            count_value = value
-    return count_value, first_numeric_row_index
+def _extract_column_names(lines: list[str], data_start: int) -> list[str] | None:
+    for index in range(max(0, data_start - 2), data_start):
+        column_names = parse_column_header(lines[index])
+        if column_names:
+            return column_names
+    return None
+
+
+def _build_block(lines: list[str], start_index: int, *, marker_index: int | None = None) -> dict[str, object] | None:
+    expected_count = None
+    data_start = start_index
+    if marker_index is not None:
+        expected_count, data_start = _locate_count_and_data_start(lines, marker_index)
+    numeric_rows = collect_numeric_block(lines, data_start, expected_count)
+    if len(numeric_rows) < 8:
+        return None
+    column_names = _extract_column_names(lines, data_start)
+    header_start = max(0, (marker_index if marker_index is not None else data_start) - 160)
+    header_end = marker_index if marker_index is not None else data_start
+    header_lines = [candidate for candidate in lines[header_start:header_end] if candidate]
+    return {
+        "block_index": 0,
+        "line_index": marker_index if marker_index is not None else data_start,
+        "row_count": len(numeric_rows),
+        "header_lines": header_lines,
+        "metadata": parse_header_key_values(header_lines),
+        "dataframe": to_dataframe(numeric_rows, column_names),
+    }
 
 
 def _find_primary_blocks(lines: list[str]) -> list[dict[str, object]]:
     blocks: list[dict[str, object]] = []
     for index, line in enumerate(lines):
-        if line != "primary_data":
+        if not is_primary_data_marker(line):
             continue
-        expected_count, data_start = _locate_count_and_data_start(lines, index)
-        numeric_rows = collect_numeric_block(lines, data_start, expected_count)
-        if len(numeric_rows) < 10:
+        block = _build_block(lines, index + 1, marker_index=index)
+        if not block:
             continue
-        header_start = max(0, index - 160)
-        header_lines = [candidate for candidate in lines[header_start:index] if candidate]
-        blocks.append(
-            {
-                "block_index": len(blocks),
-                "line_index": index,
-                "row_count": len(numeric_rows),
-                "header_lines": header_lines,
-                "metadata": parse_header_key_values(header_lines),
-                "dataframe": to_dataframe(numeric_rows),
-            }
-        )
+        block["block_index"] = len(blocks)
+        blocks.append(block)
+    return blocks
+
+
+def _find_fallback_blocks(lines: list[str]) -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
+    index = 0
+    while index < len(lines):
+        if parse_numeric_row(lines[index]) is None:
+            index += 1
+            continue
+        block = _build_block(lines, index)
+        if block:
+            block["block_index"] = len(blocks)
+            blocks.append(block)
+            index += int(block["row_count"])
+        else:
+            index += 1
     return blocks
 
 
@@ -62,7 +100,10 @@ def _standardize_dataframe(dataframe: pd.DataFrame, detected_columns: dict[str, 
         return dataframe, {}
     standardized = pd.DataFrame(index=dataframe.index)
     mapping: dict[str, str] = {}
-    for semantic_name, source_column in detected_columns.items():
+    for semantic_name in ("potential", "current", "time"):
+        source_column = detected_columns.get(semantic_name)
+        if not source_column or source_column not in dataframe.columns:
+            continue
         target_name = f"{semantic_name}_v" if semantic_name == "potential" else semantic_name
         if semantic_name == "current":
             target_name = "current_a"
@@ -75,14 +116,16 @@ def _standardize_dataframe(dataframe: pd.DataFrame, detected_columns: dict[str, 
         if column_name in detected_columns.values():
             continue
         standardized[column_name] = dataframe[column_name].astype(float)
-    return standardized, mapping
+    return standardized.dropna(how="all"), mapping
 
 
 def parse_ids_file(file_path: str | Path) -> ParsedMeasurementData:
     lines = read_ids_lines(file_path)
     blocks = _find_primary_blocks(lines)
     if not blocks:
-        raise ValueError(f"primary_data ブロックを検出できませんでした: {file_path}")
+        blocks = _find_fallback_blocks(lines)
+    if not blocks:
+        raise ValueError(f"数値データブロックを検出できませんでした: {file_path}")
 
     selected_block = max(blocks, key=lambda block: (int(block["row_count"]), int(block["line_index"])))
     detected_columns = detect_standard_columns(selected_block["dataframe"])  # type: ignore[arg-type]
@@ -101,6 +144,7 @@ def parse_ids_file(file_path: str | Path) -> ParsedMeasurementData:
         }
         for block in blocks
     ]
+    metadata["parser_recovered"] = not any(is_primary_data_marker(line) for line in lines)
     return ParsedMeasurementData(
         metadata=metadata,
         raw_header_text="\n".join(header_lines),
