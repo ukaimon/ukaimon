@@ -42,7 +42,14 @@ TIMESTAMP_COLUMNS = {
     "error_logs": ("created_at",),
 }
 
-SOFT_DELETABLE_TABLES = {"mip_records", "mip_usage_records", "sessions", "conditions"}
+SOFT_DELETABLE_TABLES = {
+    "mip_records",
+    "mip_usage_records",
+    "sessions",
+    "conditions",
+    "batch_plan_items",
+    "measurements",
+}
 
 
 class ElectrochemRepository:
@@ -164,6 +171,7 @@ class ElectrochemRepository:
             INNER JOIN sessions AS s ON s.session_id = b.session_id
             INNER JOIN conditions AS c ON c.condition_id = b.condition_id
             WHERE b.planned_status = ?
+              AND {self._active_clause("batch_plan_items", "b")}
               AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
         """
@@ -179,13 +187,19 @@ class ElectrochemRepository:
             """
             SELECT COUNT(*) AS assigned_count
             FROM batch_plan_items
-            WHERE session_id = ? AND assigned_measurement_id IS NOT NULL
+            WHERE session_id = ?
+              AND assigned_measurement_id IS NOT NULL
+              AND COALESCE(is_deleted, 0) = 0
             """,
             (session_id,),
         )
         if existing_assigned and int(existing_assigned["assigned_count"]) > 0:
             raise ValueError("実測データが紐付いたバッチ計画は安全のため置き換えできません。")
-        self.database.delete("batch_plan_items", "session_id = ?", (session_id,))
+        self.database.delete(
+            "batch_plan_items",
+            "session_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (session_id,),
+        )
         for item in items:
             self.insert_record(
                 "batch_plan_items",
@@ -206,7 +220,9 @@ class ElectrochemRepository:
             """
             UPDATE batch_plan_items
             SET planned_status = ?, updated_at = ?
-            WHERE session_id = ? AND planned_status IN (?, ?)
+            WHERE session_id = ?
+              AND planned_status IN (?, ?)
+              AND COALESCE(is_deleted, 0) = 0
             """,
             (
                 PlannedStatus.WAITING.value,
@@ -329,6 +345,36 @@ class ElectrochemRepository:
             "mean_count": int(counts.get("mean_count", 0)),
         }
 
+    def get_batch_item_dependency_summary(self, batch_item_id: str) -> dict[str, int]:
+        counts = self.database.fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM measurements WHERE batch_item_id = ?) AS measurement_count,
+                (SELECT COUNT(*) FROM measurements WHERE batch_item_id = ? AND COALESCE(is_deleted, 0) = 0) AS active_measurement_count
+            """,
+            (batch_item_id, batch_item_id),
+        ) or {}
+        return {
+            "measurement_count": int(counts.get("measurement_count", 0)),
+            "active_measurement_count": int(counts.get("active_measurement_count", 0)),
+        }
+
+    def get_measurement_dependency_summary(self, measurement_id: str) -> dict[str, int]:
+        counts = self.database.fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM measurement_conditions WHERE measurement_id = ?) AS condition_param_count,
+                (SELECT COUNT(*) FROM analysis_results WHERE measurement_id = ?) AS analysis_count,
+                (SELECT COUNT(*) FROM cycle_results WHERE measurement_id = ?) AS cycle_count
+            """,
+            (measurement_id, measurement_id, measurement_id),
+        ) or {}
+        return {
+            "condition_param_count": int(counts.get("condition_param_count", 0)),
+            "analysis_count": int(counts.get("analysis_count", 0)),
+            "cycle_count": int(counts.get("cycle_count", 0)),
+        }
+
     def logical_delete_mip(self, mip_id: str) -> None:
         self.mark_deleted("mip_records", mip_id)
         self.bulk_mark_deleted("mip_usage_records", "mip_id = ?", (mip_id,))
@@ -356,6 +402,32 @@ class ElectrochemRepository:
         self.mark_deleted("sessions", session_id)
         self.bulk_mark_deleted("conditions", "session_id = ?", (session_id,))
 
+    def logical_delete_batch_item(self, batch_item_id: str) -> None:
+        self.update_record(
+            "batch_plan_items",
+            batch_item_id,
+            {
+                "planned_status": PlannedStatus.SKIPPED.value,
+                "is_deleted": 1,
+                "deleted_at": now_iso(),
+            },
+        )
+
+    def logical_delete_measurement(self, measurement_id: str) -> None:
+        self.mark_deleted("measurements", measurement_id)
+        measurement = self.get_record("measurements", measurement_id)
+        if not measurement:
+            return
+        batch_item_id = measurement.get("batch_item_id")
+        if batch_item_id:
+            self.update_record(
+                "batch_plan_items",
+                str(batch_item_id),
+                {
+                    "planned_status": PlannedStatus.RELINK_NEEDED.value,
+                },
+            )
+
     def purge_session(self, session_id: str) -> None:
         self.database.delete("mean_voltammogram_records", "session_id = ?", (session_id,))
         self.database.delete("aggregated_results", "session_id = ?", (session_id,))
@@ -370,13 +442,37 @@ class ElectrochemRepository:
         self.database.delete("batch_plan_items", "condition_id = ?", (condition_id,))
         self.delete_record_physical("conditions", condition_id)
 
+    def purge_batch_item(self, batch_item_id: str) -> None:
+        self.delete_record_physical("batch_plan_items", batch_item_id)
+
+    def purge_measurement(self, measurement_id: str) -> None:
+        measurement = self.get_record("measurements", measurement_id)
+        if not measurement:
+            return
+        batch_item_id = measurement.get("batch_item_id")
+        if batch_item_id:
+            self.update_record(
+                "batch_plan_items",
+                str(batch_item_id),
+                {
+                    "planned_status": PlannedStatus.WAITING.value,
+                    "assigned_measurement_id": None,
+                },
+            )
+        self.database.delete("measurement_conditions", "measurement_id = ?", (measurement_id,))
+        self.database.delete("analysis_results", "measurement_id = ?", (measurement_id,))
+        self.database.delete("cycle_results", "measurement_id = ?", (measurement_id,))
+        self.database.delete("error_logs", "measurement_id = ?", (measurement_id,))
+        self.delete_record_physical("measurements", measurement_id)
+
     def list_active_batch_items(self, session_id: str | None = None) -> list[dict[str, Any]]:
         sql = f"""
             SELECT b.*
             FROM batch_plan_items AS b
             INNER JOIN sessions AS s ON s.session_id = b.session_id
             INNER JOIN conditions AS c ON c.condition_id = b.condition_id
-            WHERE {self._active_clause("sessions", "s")}
+            WHERE {self._active_clause("batch_plan_items", "b")}
+              AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
         """
         params: list[Any] = []
@@ -392,7 +488,8 @@ class ElectrochemRepository:
             FROM measurements AS m
             INNER JOIN sessions AS s ON s.session_id = m.session_id
             INNER JOIN conditions AS c ON c.condition_id = m.condition_id
-            WHERE {self._active_clause("sessions", "s")}
+            WHERE {self._active_clause("measurements", "m")}
+              AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
         """
         params: list[Any] = []
@@ -422,6 +519,7 @@ class ElectrochemRepository:
                 INNER JOIN sessions AS s ON s.session_id = m.session_id
                 INNER JOIN conditions AS c ON c.condition_id = m.condition_id
                 WHERE m.condition_id = ?
+                  AND COALESCE(m.is_deleted, 0) = 0
                   AND COALESCE(s.is_deleted, 0) = 0
                   AND COALESCE(c.is_deleted, 0) = 0
                 ORDER BY m.rep_no ASC
@@ -429,10 +527,13 @@ class ElectrochemRepository:
                 (condition["condition_id"],),
             )
             analysis_frame = self.database.query_frame(
-                """
-                SELECT representative_current_a
-                FROM analysis_results
-                WHERE condition_id = ? AND representative_current_a IS NOT NULL
+                f"""
+                SELECT a.representative_current_a
+                FROM analysis_results AS a
+                INNER JOIN measurements AS m ON m.measurement_id = a.measurement_id
+                WHERE a.condition_id = ?
+                  AND a.representative_current_a IS NOT NULL
+                  AND {self._active_clause("measurements", "m")}
                 """,
                 (condition["condition_id"],),
             )
@@ -509,7 +610,8 @@ class ElectrochemRepository:
             FROM measurements AS m
             INNER JOIN sessions AS s ON s.session_id = m.session_id
             INNER JOIN conditions AS c ON c.condition_id = m.condition_id
-            WHERE {self._active_clause("sessions", "s")}
+            WHERE {self._active_clause("measurements", "m")}
+              AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
               AND m.final_quality_flag <> ?
             """,
@@ -540,7 +642,17 @@ class ElectrochemRepository:
         conditions = self.list_records("conditions", "concentration_value ASC", "session_id = ?", (session_id,))
         batch_items = self.list_active_batch_items(session_id)
         measurements = self.list_active_measurements(session_id)
-        analysis_results = self.list_records("analysis_results", "created_at ASC", "session_id = ?", (session_id,))
+        analysis_results = self.database.fetch_all(
+            """
+            SELECT a.*
+            FROM analysis_results AS a
+            INNER JOIN measurements AS m ON m.measurement_id = a.measurement_id
+            WHERE a.session_id = ?
+              AND COALESCE(m.is_deleted, 0) = 0
+            ORDER BY a.created_at ASC
+            """,
+            (session_id,),
+        )
         mean_records = self.list_records("mean_voltammogram_records", "created_at DESC", "session_id = ?", (session_id,))
         return {
             "session": session,
@@ -562,6 +674,7 @@ class ElectrochemRepository:
             LEFT JOIN analysis_results AS a ON a.measurement_id = m.measurement_id
             WHERE m.condition_id = ?
               AND m.final_quality_flag IN ({placeholders})
+              AND {self._active_clause("measurements", "m")}
               AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
             ORDER BY m.rep_no ASC
@@ -589,6 +702,7 @@ class ElectrochemRepository:
             INNER JOIN sessions AS s ON s.session_id = m.session_id
             INNER JOIN conditions AS c ON c.condition_id = m.condition_id
             WHERE m.session_id = ?
+              AND {self._active_clause("measurements", "m")}
               AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
             ORDER BY m.rep_no ASC
@@ -618,6 +732,7 @@ class ElectrochemRepository:
                 INNER JOIN sessions AS s ON s.session_id = b.session_id
                 INNER JOIN conditions AS c ON c.condition_id = b.condition_id
                 WHERE b.session_id = ?
+                  AND {self._active_clause("batch_plan_items", "b")}
                   AND {self._active_clause("sessions", "s")}
                   AND {self._active_clause("conditions", "c")}
                 ORDER BY b.planned_order ASC
@@ -625,10 +740,6 @@ class ElectrochemRepository:
                 (session_id,),
             ),
             "測定一覧": measurements,
-            "解析結果": self.database.query_frame(
-                "SELECT * FROM analysis_results WHERE session_id = ? ORDER BY created_at ASC",
-                (session_id,),
-            ),
             "集計結果": self.database.query_frame(
                 "SELECT * FROM aggregated_results WHERE session_id = ? ORDER BY created_at ASC",
                 (session_id,),
@@ -645,6 +756,10 @@ class ElectrochemRepository:
 
         if measurement_ids:
             placeholders = ", ".join("?" for _ in measurement_ids)
+            frames["解析結果"] = self.database.query_frame(
+                f"SELECT * FROM analysis_results WHERE measurement_id IN ({placeholders}) ORDER BY created_at ASC",
+                tuple(measurement_ids),
+            )
             frames["測定条件一覧"] = self.database.query_frame(
                 f"SELECT * FROM measurement_conditions WHERE measurement_id IN ({placeholders})",
                 tuple(measurement_ids),
@@ -654,6 +769,7 @@ class ElectrochemRepository:
                 tuple(measurement_ids),
             )
         else:
+            frames["解析結果"] = pd.DataFrame()
             frames["測定条件一覧"] = pd.DataFrame()
             frames["サイクル結果"] = pd.DataFrame()
         return frames
@@ -683,7 +799,8 @@ class ElectrochemRepository:
             LEFT JOIN mip_usage_records AS mu ON mu.mip_usage_id = s.mip_usage_id
             LEFT JOIN mip_records AS mr ON mr.mip_id = mu.mip_id
             LEFT JOIN analysis_results AS a ON a.measurement_id = m.measurement_id
-            WHERE {self._active_clause("sessions", "s")}
+            WHERE {self._active_clause("measurements", "m")}
+              AND {self._active_clause("sessions", "s")}
               AND {self._active_clause("conditions", "c")}
         """
         params: list[Any] = []

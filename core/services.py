@@ -272,6 +272,37 @@ class AppServices:
         self.repository.replace_batch_plan(session_id, generated_items)
         return self.list_batch_items(session_id)
 
+    def update_batch_item(self, batch_item_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["session_id", "condition_id", "planned_order", "rep_no", "planned_status"])
+        current = self.repository.get_record("batch_plan_items", batch_item_id)
+        if not current:
+            raise ValueError(f"バッチ計画項目が見つかりません: {batch_item_id}")
+        session = self.repository.get_record("sessions", str(payload["session_id"]))
+        condition = self.repository.get_record("conditions", str(payload["condition_id"]))
+        if not session or int(session.get("is_deleted", 0)) == 1:
+            raise ValueError("更新先のセッションが見つかりません。")
+        if not condition or int(condition.get("is_deleted", 0)) == 1:
+            raise ValueError("更新先の条件が見つかりません。")
+        if str(condition["session_id"]) != str(payload["session_id"]):
+            raise ValueError("選択した条件は指定セッションに属していません。")
+        if current.get("assigned_measurement_id"):
+            immutable_fields = (
+                str(current.get("session_id")) != str(payload["session_id"])
+                or str(current.get("condition_id")) != str(payload["condition_id"])
+                or int(current.get("rep_no") or 0) != int(payload["rep_no"])
+            )
+            if immutable_fields:
+                raise ValueError("測定が紐付いたバッチ計画はセッション・条件・rep を変更できません。")
+        self.repository.update_record("batch_plan_items", batch_item_id, payload)
+
+    def delete_batch_item(self, batch_item_id: str) -> str:
+        summary = self.repository.get_batch_item_dependency_summary(batch_item_id)
+        if summary["measurement_count"] == 0:
+            self.repository.purge_batch_item(batch_item_id)
+            return "バッチ計画項目を物理削除しました。"
+        self.repository.logical_delete_batch_item(batch_item_id)
+        return "測定データがあるため、バッチ計画項目を論理削除しました。"
+
     def create_measurement(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["condition_id", "session_id"])
         condition_id = str(payload["condition_id"])
@@ -291,6 +322,78 @@ class AppServices:
         self.repository.insert_record("measurements", payload)
         self.repository.refresh_condition_stats(condition_id=condition_id)
         return str(payload["measurement_id"])
+
+    def update_measurement(self, measurement_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["condition_id", "session_id"])
+        current = self.repository.get_record("measurements", measurement_id)
+        if not current or int(current.get("is_deleted", 0)) == 1:
+            raise ValueError(f"測定が見つかりません: {measurement_id}")
+
+        session = self.repository.get_record("sessions", str(payload["session_id"]))
+        condition = self.repository.get_record("conditions", str(payload["condition_id"]))
+        if not session or int(session.get("is_deleted", 0)) == 1:
+            raise ValueError("更新先のセッションが見つかりません。")
+        if not condition or int(condition.get("is_deleted", 0)) == 1:
+            raise ValueError("更新先の条件が見つかりません。")
+        if str(condition["session_id"]) != str(payload["session_id"]):
+            raise ValueError("選択した条件は指定セッションに属していません。")
+
+        target_condition_id = str(payload["condition_id"])
+        target_session_id = str(payload["session_id"])
+        moving_target = (
+            str(current.get("condition_id")) != target_condition_id
+            or str(current.get("session_id")) != target_session_id
+        )
+        summary = self.repository.get_measurement_dependency_summary(measurement_id)
+        has_related_analysis = sum(summary.values()) > 0
+        if moving_target and (has_related_analysis or current.get("batch_item_id")):
+            raise ValueError("解析済み、またはバッチ計画に紐付いた測定は条件・セッションを変更できません。")
+
+        auto_quality_flag = derive_auto_quality(
+            payload.get("noise_level"),
+            str(payload.get("status")),
+        ).value
+        manual_quality_flag = str(payload.get("manual_quality_flag")) if payload.get("manual_quality_flag") else None
+        update_payload = dict(payload)
+        update_payload["mip_usage_id"] = session.get("mip_usage_id")
+        update_payload["auto_quality_flag"] = auto_quality_flag
+        update_payload["final_quality_flag"] = resolve_final_quality(auto_quality_flag, manual_quality_flag).value
+
+        if moving_target:
+            update_payload["rep_no"] = self.repository.get_next_rep_no(target_condition_id)
+
+        self.repository.update_record("measurements", measurement_id, update_payload)
+        affected_condition_ids = {str(current["condition_id"]), target_condition_id}
+        affected_session_ids = {str(current["session_id"]), target_session_id}
+        for condition_id in affected_condition_ids:
+            self.repository.refresh_condition_stats(condition_id=condition_id)
+        for session_id in affected_session_ids:
+            session_row = self.repository.get_record("sessions", session_id)
+            if session_row and int(session_row.get("is_deleted", 0)) == 0:
+                self.aggregate_session(session_id)
+                if self.config.mean_voltammogram_enabled:
+                    self.generate_mean_voltammograms(session_id)
+
+    def delete_measurement(self, measurement_id: str) -> str:
+        measurement = self.repository.get_record("measurements", measurement_id)
+        if not measurement or int(measurement.get("is_deleted", 0)) == 1:
+            raise ValueError(f"測定が見つかりません: {measurement_id}")
+        summary = self.repository.get_measurement_dependency_summary(measurement_id)
+        if sum(summary.values()) == 0:
+            self.repository.purge_measurement(measurement_id)
+            message = "測定を物理削除しました。"
+        else:
+            self.repository.logical_delete_measurement(measurement_id)
+            message = "解析関連データがあるため、測定を論理削除しました。"
+        condition_id = str(measurement["condition_id"])
+        session_id = str(measurement["session_id"])
+        self.repository.refresh_condition_stats(condition_id=condition_id)
+        session = self.repository.get_record("sessions", session_id)
+        if session and int(session.get("is_deleted", 0)) == 0:
+            self.aggregate_session(session_id)
+            if self.config.mean_voltammogram_enabled:
+                self.generate_mean_voltammograms(session_id, condition_id)
+        return message
 
     def _analyze_parsed_data(self, dataframe: pd.DataFrame, method: str):
         normalized_method = method.lower()
@@ -442,9 +545,11 @@ class AppServices:
             measurement_rows = [row for row in measurement_rows if row["condition_id"] == condition["condition_id"]]
             analysis_rows = self.repository.database.fetch_all(
                 """
-                SELECT *
-                FROM analysis_results
-                WHERE condition_id = ?
+                SELECT a.*
+                FROM analysis_results AS a
+                INNER JOIN measurements AS m ON m.measurement_id = a.measurement_id
+                WHERE a.condition_id = ?
+                  AND COALESCE(m.is_deleted, 0) = 0
                 ORDER BY created_at ASC
                 """,
                 (condition["condition_id"],),
@@ -538,10 +643,10 @@ class AppServices:
         bundle = self.repository.get_session_bundle(session_id)
         directories = session_output_directories(self.root_path, session_id)
         measurements_frame = self.repository.database.query_frame(
-            """
+            f"""
             SELECT *
             FROM measurements
-            WHERE session_id = ?
+            WHERE session_id = ? AND COALESCE(is_deleted, 0) = 0
             ORDER BY rep_no ASC
             """,
             (session_id,),

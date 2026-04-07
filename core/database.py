@@ -103,6 +103,8 @@ SCHEMA_STATEMENTS = [
         planned_status TEXT NOT NULL,
         assigned_measurement_id TEXT,
         note TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id),
@@ -132,6 +134,8 @@ SCHEMA_STATEMENTS = [
         manual_quality_flag TEXT,
         final_quality_flag TEXT,
         exclusion_reason TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (batch_item_id) REFERENCES batch_plan_items (batch_item_id),
@@ -275,6 +279,14 @@ SOFT_DELETE_COLUMNS = {
         "deleted_at": "TEXT",
     },
     "conditions": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+    "batch_plan_items": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+    "measurements": {
         "is_deleted": "INTEGER NOT NULL DEFAULT 0",
         "deleted_at": "TEXT",
     },
