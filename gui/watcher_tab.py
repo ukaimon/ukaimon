@@ -14,6 +14,8 @@ class WatcherTab(ttk.Frame):
         self.refresh_app = refresh_app
         self._auto_watch_attempted = False
         self.watch_folder_var = tk.StringVar(value=str((services.root_path / services.config.watch_folder).resolve()))
+        self.relink_measurement_var = tk.StringVar()
+        self.relink_batch_item_var = tk.StringVar()
 
         controls = ttk.LabelFrame(self, text="Ivium .ids ファイル監視")
         controls.pack(fill="x", padx=12, pady=12)
@@ -23,6 +25,17 @@ class WatcherTab(ttk.Frame):
         ttk.Button(controls, text="監視開始", command=self._start_watch).grid(row=0, column=3, padx=6)
         ttk.Button(controls, text="監視停止", command=self._stop_watch).grid(row=0, column=4, padx=6)
         ttk.Button(controls, text="単一ファイル解析", command=self._import_single_file).grid(row=0, column=5, padx=6)
+
+        relink = ttk.LabelFrame(self, text="手動修正")
+        relink.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Label(relink, text="測定 ID").grid(row=0, column=0, sticky="w", padx=6, pady=6)
+        self.relink_measurement_combo = ttk.Combobox(relink, textvariable=self.relink_measurement_var, width=28, state="readonly")
+        self.relink_measurement_combo.grid(row=0, column=1, sticky="w")
+        ttk.Label(relink, text="移動先バッチ ID").grid(row=0, column=2, sticky="w", padx=6, pady=6)
+        self.relink_batch_combo = ttk.Combobox(relink, textvariable=self.relink_batch_item_var, width=28, state="readonly")
+        self.relink_batch_combo.grid(row=0, column=3, sticky="w")
+        ttk.Button(relink, text="再リンク", command=self._relink_measurement).grid(row=0, column=4, padx=6)
+        ttk.Button(relink, text="指定項目へ取込", command=self._import_single_file_to_target).grid(row=0, column=5, padx=6)
 
         self.status_list = tk.Listbox(self, height=16)
         self.status_list.pack(fill="both", expand=True, padx=12, pady=12)
@@ -76,6 +89,42 @@ class WatcherTab(ttk.Frame):
         except Exception as error:
             messagebox.showerror("単一ファイル解析", str(error))
 
+    def _import_single_file_to_target(self) -> None:
+        if not self.relink_batch_item_var.get():
+            messagebox.showinfo("指定項目へ取込", "移動先バッチ ID を選択してください。")
+            return
+        file_path = filedialog.askopenfilename(filetypes=[("Ivium ids", "*.ids")])
+        if not file_path:
+            return
+        try:
+            measurement_id = self.services.import_ids_file(file_path, batch_item_id=self.relink_batch_item_var.get())
+            self._append_status(f"指定取込成功: {measurement_id}")
+            self.refresh_tab()
+        except Exception as error:
+            messagebox.showerror("指定項目へ取込", str(error))
+
+    def _relink_measurement(self) -> None:
+        if not self.relink_measurement_var.get() or not self.relink_batch_item_var.get():
+            messagebox.showinfo("再リンク", "測定 ID と移動先バッチ ID を選択してください。")
+            return
+        try:
+            message = self.services.relink_measurement(
+                self.relink_measurement_var.get(),
+                self.relink_batch_item_var.get(),
+            )
+            self._append_status(message)
+            self.refresh_tab()
+        except Exception as error:
+            messagebox.showerror("再リンク", str(error))
+
     def refresh_tab(self) -> None:
         if self.status_list.size() == 0:
             self.status_list.insert(tk.END, "待機中")
+        measurement_ids = [row["measurement_id"] for row in self.services.list_relink_measurements()]
+        batch_item_ids = [row["batch_item_id"] for row in self.services.list_relink_batch_items()]
+        self.relink_measurement_combo["values"] = measurement_ids
+        self.relink_batch_combo["values"] = batch_item_ids
+        if measurement_ids and self.relink_measurement_var.get() not in measurement_ids:
+            self.relink_measurement_var.set(measurement_ids[0])
+        if batch_item_ids and self.relink_batch_item_var.get() not in batch_item_ids:
+            self.relink_batch_item_var.set(batch_item_ids[0])

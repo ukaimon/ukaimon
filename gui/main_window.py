@@ -13,6 +13,7 @@ from gui.measurement_tab import MeasurementTab
 from gui.mip_tab import MipTab
 from gui.mip_usage_tab import MipUsageTab
 from gui.navigation import RECORD_TYPE_TO_TAB_TITLE
+from gui.restore_tab import RestoreTab
 from gui.session_detail_tab import SessionDetailTab
 from gui.session_tab import SessionTab
 from gui.watcher_tab import WatcherTab
@@ -42,6 +43,7 @@ class MainWindow:
             ("バッチ実行計画", BatchPlanTab(self.notebook, services, self.refresh_all)),
             ("測定追加", MeasurementTab(self.notebook, services, self.refresh_all)),
             (".ids 監視", WatcherTab(self.notebook, services, self.refresh_all)),
+            ("復元", RestoreTab(self.notebook, services, self.refresh_all)),
             ("セッション詳細", SessionDetailTab(self.notebook, services, self.refresh_all)),
             ("横断比較", CrossReportTab(self.notebook, services, self.refresh_all)),
             ("レポート出力", ExportTab(self.notebook, services, self.refresh_all)),
