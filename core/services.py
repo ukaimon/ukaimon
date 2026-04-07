@@ -24,7 +24,7 @@ from export.markdown_reporter import MarkdownReporter
 from parsers.ivium_ids_parser import parse_ids_file
 from parsers.measurement_conditions_parser import build_measurement_conditions
 from utils.date_utils import now_iso, today_string
-from utils.file_utils import ensure_directories, generate_id, session_output_directories
+from utils.file_utils import ensure_directories, generate_condition_id, generate_id, session_output_directories
 
 
 LOGGER = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ class AppServices:
 
     def create_condition(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["session_id", "concentration_value", "concentration_unit", "method"])
-        condition_id = generate_id("COND")
+        condition_id = generate_condition_id(payload["concentration_value"], payload["concentration_unit"])
         session = self.repository.get_record("sessions", str(payload["session_id"]))
         payload.setdefault("analyte", session["analyte"] if session else "")
         payload.setdefault("condition_status", "pending")
@@ -252,18 +252,20 @@ class AppServices:
                 self.aggregate_session(session_id)
 
     def duplicate_condition(self, condition_id: str) -> str:
-        new_id = self.repository.duplicate_record("conditions", condition_id, "COND")
-        self.repository.update_record(
-            "conditions",
-            new_id,
-            {
-                "actual_replicates": 0,
-                "n_valid": 0,
-                "n_invalid": 0,
-                "cv_percent": None,
-                "condition_status": "pending",
-            },
-        )
+        current = self.repository.get_record("conditions", condition_id)
+        if not current or int(current.get("is_deleted", 0)) == 1:
+            raise ValueError(f"条件が見つかりません: {condition_id}")
+        new_id = generate_condition_id(current.get("concentration_value"), current.get("concentration_unit"))
+        cloned = dict(current)
+        cloned["condition_id"] = new_id
+        cloned["actual_replicates"] = 0
+        cloned["n_valid"] = 0
+        cloned["n_invalid"] = 0
+        cloned["cv_percent"] = None
+        cloned["condition_status"] = "pending"
+        for column_name in ("created_at", "updated_at", "is_deleted", "deleted_at"):
+            cloned.pop(column_name, None)
+        self.repository.insert_record("conditions", cloned)
         return new_id
 
     def delete_condition(self, condition_id: str) -> str:
