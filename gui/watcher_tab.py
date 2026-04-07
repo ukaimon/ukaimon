@@ -12,6 +12,7 @@ class WatcherTab(ttk.Frame):
         super().__init__(master)
         self.services = services
         self.refresh_app = refresh_app
+        self._auto_watch_attempted = False
         self.watch_folder_var = tk.StringVar(value=str((services.root_path / services.config.watch_folder).resolve()))
 
         controls = ttk.LabelFrame(self, text="Ivium .ids ファイル監視")
@@ -25,6 +26,7 @@ class WatcherTab(ttk.Frame):
 
         self.status_list = tk.Listbox(self, height=16)
         self.status_list.pack(fill="both", expand=True, padx=12, pady=12)
+        self.after(150, self._auto_start_watch)
 
     def _append_status(self, message: str) -> None:
         self.status_list.insert(tk.END, message)
@@ -37,7 +39,7 @@ class WatcherTab(ttk.Frame):
             self.watch_folder_var.set(folder)
             self.services.config.watch_folder = str(Path(folder).resolve().relative_to(self.services.root_path))
 
-    def _start_watch(self) -> None:
+    def _begin_watch(self, *, show_error_dialog: bool) -> None:
         try:
             watch_path = Path(self.watch_folder_var.get())
             if watch_path.is_absolute():
@@ -47,7 +49,19 @@ class WatcherTab(ttk.Frame):
                     self.services.config.watch_folder = str(watch_path.resolve())
             self.services.start_watcher(self._append_status)
         except Exception as error:
-            messagebox.showerror("監視開始", str(error))
+            if show_error_dialog:
+                messagebox.showerror("監視開始", str(error))
+            else:
+                self._append_status(f"自動監視開始に失敗: {error}")
+
+    def _start_watch(self) -> None:
+        self._begin_watch(show_error_dialog=True)
+
+    def _auto_start_watch(self) -> None:
+        if self._auto_watch_attempted:
+            return
+        self._auto_watch_attempted = True
+        self._begin_watch(show_error_dialog=False)
 
     def _stop_watch(self) -> None:
         self.services.stop_watcher()
