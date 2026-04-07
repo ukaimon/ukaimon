@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from core.mip_fields import MIP_FIELD_GROUPS, MIP_FIELD_SPECS, with_mip_field_defaults
 from core.services import AppServices
 from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_target, get_selected_tree_values, select_tree_record
 from utils.date_utils import today_string
@@ -19,9 +20,15 @@ class MipTab(ttk.Frame):
         self.preparation_date_var = tk.StringVar(value=today_string())
         self.operator_var = tk.StringVar()
         self.note_var = tk.StringVar()
+        self.detail_vars = {
+            spec.key: tk.StringVar(value=spec.default_value)
+            for spec in MIP_FIELD_SPECS
+        }
 
         form = ttk.LabelFrame(self, text="MIP 登録 / 編集")
         form.pack(fill="x", padx=12, pady=12)
+        form.columnconfigure(1, weight=1)
+        form.columnconfigure(5, weight=1)
         ttk.Label(form, text="テンプレート名").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.template_name_var, width=28).grid(row=0, column=1, sticky="w")
         ttk.Label(form, text="調製日").grid(row=0, column=2, sticky="w", padx=6, pady=6)
@@ -31,6 +38,21 @@ class MipTab(ttk.Frame):
         ttk.Label(form, text="メモ").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.note_var, width=60).grid(row=1, column=1, columnspan=5, sticky="we", padx=(0, 6))
         ttk.Button(form, textvariable=self.save_button_label, command=self._save_mip).grid(row=0, column=6, rowspan=2, padx=6)
+        details = ttk.Frame(form)
+        details.grid(row=2, column=0, columnspan=7, sticky="we", padx=6, pady=(0, 6))
+        for column_index, (group_name, specs) in enumerate(MIP_FIELD_GROUPS):
+            details.columnconfigure(column_index, weight=1)
+            group = ttk.LabelFrame(details, text=group_name)
+            group.grid(row=0, column=column_index, sticky="nsew", padx=(0, 6 if column_index < len(MIP_FIELD_GROUPS) - 1 else 0))
+            for row_index, spec in enumerate(specs):
+                ttk.Label(group, text=spec.label).grid(row=row_index, column=0, sticky="w", padx=6, pady=4)
+                ttk.Entry(group, textvariable=self.detail_vars[spec.key], width=14).grid(
+                    row=row_index,
+                    column=1,
+                    sticky="w",
+                    padx=(0, 6),
+                    pady=4,
+                )
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", padx=12)
@@ -78,10 +100,16 @@ class MipTab(ttk.Frame):
         self.preparation_date_var.set(str(row.get("preparation_date", "")))
         self.operator_var.set(str(row.get("operator", "")))
         self.note_var.set(str(row.get("note", "")))
+        self._set_detail_values(row)
 
     def focus_record(self, mip_id: str) -> None:
         if select_tree_record(self.tree, mip_id):
             self._load_selected()
+
+    def _set_detail_values(self, payload: dict[str, object] | None = None) -> None:
+        detail_values = with_mip_field_defaults(payload)
+        for spec in MIP_FIELD_SPECS:
+            self.detail_vars[spec.key].set(str(detail_values[spec.key]))
 
     def _reset_form(self) -> None:
         self.editing_mip_id = None
@@ -90,6 +118,7 @@ class MipTab(ttk.Frame):
         self.preparation_date_var.set(today_string())
         self.operator_var.set("")
         self.note_var.set("")
+        self._set_detail_values()
         self._apply_default_operator(force=True)
 
     def _save_mip(self) -> None:
@@ -99,6 +128,7 @@ class MipTab(ttk.Frame):
             "operator": self.operator_var.get(),
             "note": self.note_var.get(),
             "tags": "",
+            **{spec.key: self.detail_vars[spec.key].get() for spec in MIP_FIELD_SPECS},
         }
         try:
             if self.editing_mip_id:

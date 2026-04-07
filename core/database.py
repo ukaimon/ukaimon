@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from core.mip_fields import MIP_FIELD_DEFAULTS, MIP_FIELD_SQL_COLUMNS
+
 
 SCHEMA_STATEMENTS = [
     """
@@ -20,6 +22,19 @@ SCHEMA_STATEMENTS = [
         polymerization_method TEXT,
         polymerization_time TEXT,
         light_condition TEXT,
+        dmso_ul TEXT DEFAULT '19',
+        histamine_dihydrochloride_g TEXT DEFAULT '0.3680',
+        maa_ul TEXT DEFAULT '340',
+        vinylferrocene_g TEXT DEFAULT '0.1509',
+        edma_ml TEXT DEFAULT '3.171',
+        ig_g TEXT DEFAULT '0.25',
+        nitrogen_flow_l_min TEXT DEFAULT '6.0',
+        rotator_rpm TEXT DEFAULT '400',
+        uv_intensity_mw_cm2 TEXT DEFAULT '4.0',
+        uv_irradiation_time_min TEXT DEFAULT '60',
+        acetic_acid_ml TEXT DEFAULT '400',
+        heated_pure_water_ml TEXT DEFAULT '600',
+        acetone_ml TEXT DEFAULT '20',
         operator TEXT NOT NULL,
         note TEXT,
         tags TEXT,
@@ -309,6 +324,7 @@ class DatabaseManager:
             for statement in SCHEMA_STATEMENTS:
                 connection.execute(statement)
             self._apply_soft_delete_migrations(connection)
+            self._apply_mip_record_migrations(connection)
             connection.commit()
 
     def _apply_soft_delete_migrations(self, connection: sqlite3.Connection) -> None:
@@ -322,6 +338,26 @@ class DatabaseManager:
                     connection.execute(
                         f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
                     )
+
+    def _apply_mip_record_migrations(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(mip_records)").fetchall()
+        }
+        for column_name, column_definition in MIP_FIELD_SQL_COLUMNS.items():
+            if column_name not in existing_columns:
+                connection.execute(
+                    f"ALTER TABLE mip_records ADD COLUMN {column_name} {column_definition}"
+                )
+        for column_name, default_value in MIP_FIELD_DEFAULTS.items():
+            connection.execute(
+                f"""
+                UPDATE mip_records
+                SET {column_name} = ?
+                WHERE {column_name} IS NULL OR TRIM(CAST({column_name} AS TEXT)) = ''
+                """,
+                (default_value,),
+            )
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self.connect() as connection:
