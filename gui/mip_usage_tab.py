@@ -25,6 +25,7 @@ class MipUsageTab(ttk.Frame):
         ttk.Label(form, text="MIP ID").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         self.mip_combo = ttk.Combobox(form, textvariable=self.mip_id_var, width=24, state="readonly")
         self.mip_combo.grid(row=0, column=1, sticky="w")
+        self.mip_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_mip_selected())
         ttk.Label(form, text="CP 調製日").grid(row=0, column=2, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.cp_date_var, width=16).grid(row=0, column=3, sticky="w")
         ttk.Label(form, text="塗布日").grid(row=0, column=4, sticky="w", padx=6, pady=6)
@@ -49,6 +50,15 @@ class MipUsageTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140 if column != "note" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+
+    def _apply_default_operator(self, force: bool = False) -> None:
+        if self.editing_usage_id:
+            return
+        if force or not self.operator_var.get().strip():
+            self.operator_var.set(self.services.get_default_mip_usage_operator(self.mip_id_var.get() or None))
+
+    def _on_mip_selected(self) -> None:
+        self._apply_default_operator(force=True)
 
     def _selected_usage_id(self) -> str | None:
         selection = self.tree.selection()
@@ -79,6 +89,7 @@ class MipUsageTab(ttk.Frame):
         self.coating_date_var.set(today_string())
         self.operator_var.set("")
         self.note_var.set("")
+        self._apply_default_operator(force=True)
 
     def _save_usage(self) -> None:
         payload = {
@@ -126,8 +137,10 @@ class MipUsageTab(ttk.Frame):
     def refresh_tab(self) -> None:
         mip_ids = [row["mip_id"] for row in self.services.list_mips()]
         self.mip_combo["values"] = mip_ids
+        selection_changed = False
         if mip_ids and self.mip_id_var.get() not in mip_ids:
             self.mip_id_var.set(mip_ids[0])
+            selection_changed = True
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -144,3 +157,4 @@ class MipUsageTab(ttk.Frame):
                     row.get("note", ""),
                 ),
             )
+        self._apply_default_operator(force=selection_changed)

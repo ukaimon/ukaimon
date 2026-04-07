@@ -46,6 +46,12 @@ class MipTab(ttk.Frame):
             self.tree.column(column, width=140 if column != "note" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
 
+    def _apply_default_operator(self, force: bool = False) -> None:
+        if self.editing_mip_id:
+            return
+        if force or not self.operator_var.get().strip():
+            self.operator_var.set(self.services.get_default_mip_operator())
+
     def _selected_mip_id(self) -> str | None:
         selection = self.tree.selection()
         if not selection:
@@ -74,6 +80,7 @@ class MipTab(ttk.Frame):
         self.preparation_date_var.set(today_string())
         self.operator_var.set("")
         self.note_var.set("")
+        self._apply_default_operator(force=True)
 
     def _save_mip(self) -> None:
         payload = {
@@ -132,3 +139,4 @@ class MipTab(ttk.Frame):
                     row.get("note", ""),
                 ),
             )
+        self._apply_default_operator()

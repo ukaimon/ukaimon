@@ -26,6 +26,7 @@ class SessionTab(ttk.Frame):
         ttk.Label(form, text="使用 ID").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         self.usage_combo = ttk.Combobox(form, textvariable=self.mip_usage_id_var, width=24, state="readonly")
         self.usage_combo.grid(row=0, column=1, sticky="w")
+        self.usage_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_usage_selected())
         ttk.Label(form, text="測定日").grid(row=0, column=2, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.session_date_var, width=16).grid(row=0, column=3, sticky="w")
         ttk.Label(form, text="測定対象物質").grid(row=0, column=4, sticky="w", padx=6, pady=6)
@@ -52,6 +53,15 @@ class SessionTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=160)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+
+    def _apply_default_operator(self, force: bool = False) -> None:
+        if self.editing_session_id:
+            return
+        if force or not self.operator_var.get().strip():
+            self.operator_var.set(self.services.get_default_session_operator(self.mip_usage_id_var.get() or None))
+
+    def _on_usage_selected(self) -> None:
+        self._apply_default_operator(force=True)
 
     def _selected_session_id(self) -> str | None:
         selection = self.tree.selection()
@@ -84,6 +94,7 @@ class SessionTab(ttk.Frame):
         self.session_name_var.set("")
         self.method_var.set("CV")
         self.operator_var.set("")
+        self._apply_default_operator(force=True)
 
     def _save_session(self) -> None:
         payload = {
@@ -135,8 +146,10 @@ class SessionTab(ttk.Frame):
     def refresh_tab(self) -> None:
         usage_ids = [row["mip_usage_id"] for row in self.services.list_mip_usages()]
         self.usage_combo["values"] = usage_ids
+        selection_changed = False
         if usage_ids and self.mip_usage_id_var.get() not in usage_ids:
             self.mip_usage_id_var.set(usage_ids[0])
+            selection_changed = True
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -153,3 +166,4 @@ class SessionTab(ttk.Frame):
                     row.get("method_default", ""),
                 ),
             )
+        self._apply_default_operator(force=selection_changed)
