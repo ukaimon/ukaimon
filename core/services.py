@@ -59,6 +59,7 @@ class AppServices:
             ]
         )
         self.repository.initialize()
+        self.repository.normalize_legacy_condition_ids()
 
     def list_mips(self) -> list[dict[str, Any]]:
         return self.repository.list_records("mip_records", "preparation_date DESC, created_at DESC")

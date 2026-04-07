@@ -49,10 +49,14 @@ def _normalize_condition_token(concentration_value: object, concentration_unit: 
     return f"{value_text}{unit_text}"[:20] or "na"
 
 
+def normalize_condition_token(concentration_value: object, concentration_unit: object | None = None) -> str:
+    return _normalize_condition_token(concentration_value, concentration_unit)
+
+
 def generate_condition_id(concentration_value: object, concentration_unit: object | None = None) -> str:
     normalized_prefix = "COND"
     date_part = datetime.now().astimezone().strftime("%Y%m%d")
-    condition_token = _normalize_condition_token(concentration_value, concentration_unit)
+    condition_token = normalize_condition_token(concentration_value, concentration_unit)
     with _ID_LOCK:
         key = (normalized_prefix, date_part, condition_token)
         _ID_COUNTERS[key] += 1

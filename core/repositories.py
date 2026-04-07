@@ -8,7 +8,7 @@ import pandas as pd
 from core.database import DatabaseManager
 from core.models import ConditionState, PlannedStatus, QualityFlag
 from utils.date_utils import now_iso
-from utils.file_utils import generate_id
+from utils.file_utils import generate_id, normalize_condition_token
 
 
 LOGGER = logging.getLogger(__name__)
@@ -58,6 +58,50 @@ class ElectrochemRepository:
 
     def initialize(self) -> None:
         self.database.initialize()
+
+    def normalize_legacy_condition_ids(self) -> int:
+        renamed_count = 0
+        condition_rows = self.database.fetch_all("SELECT * FROM conditions ORDER BY created_at ASC, rowid ASC")
+        with self.database.connect() as connection:
+            for row in condition_rows:
+                current_id = str(row["condition_id"])
+                expected_id = self._build_normalized_condition_id(current_id, row)
+                if not expected_id or expected_id == current_id:
+                    continue
+                exists = connection.execute(
+                    "SELECT 1 FROM conditions WHERE condition_id = ?",
+                    (expected_id,),
+                ).fetchone()
+                if exists:
+                    LOGGER.warning("condition id migration skipped because target already exists: %s -> %s", current_id, expected_id)
+                    continue
+                cloned = dict(row)
+                cloned["condition_id"] = expected_id
+                columns = list(cloned.keys())
+                placeholders = ", ".join("?" for _ in columns)
+                connection.execute(
+                    f"INSERT INTO conditions ({', '.join(columns)}) VALUES ({placeholders})",
+                    tuple(cloned[column_name] for column_name in columns),
+                )
+                for table_name in ("batch_plan_items", "measurements", "analysis_results", "aggregated_results", "mean_voltammogram_records"):
+                    connection.execute(
+                        f"UPDATE {table_name} SET condition_id = ? WHERE condition_id = ?",
+                        (expected_id, current_id),
+                    )
+                connection.execute("DELETE FROM conditions WHERE condition_id = ?", (current_id,))
+                renamed_count += 1
+            connection.commit()
+        return renamed_count
+
+    def _build_normalized_condition_id(self, current_id: str, row: dict[str, Any]) -> str | None:
+        parts = current_id.split("-")
+        if len(parts) < 5 or parts[0] != "COND":
+            return None
+        date_part = parts[1]
+        serial = parts[-2]
+        suffix = parts[-1]
+        condition_token = normalize_condition_token(row.get("concentration_value"), row.get("concentration_unit"))
+        return f"COND-{date_part}-{condition_token}-{serial}-{suffix}"
 
     def _supports_soft_delete(self, table_name: str) -> bool:
         return table_name in SOFT_DELETABLE_TABLES
