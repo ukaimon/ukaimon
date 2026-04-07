@@ -17,3 +17,4 @@ data/sessions/*/report/
 
 data/cross_reports/
 config/local_config.json
+vendor/wheels/

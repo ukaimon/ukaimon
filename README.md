@@ -42,6 +42,22 @@ pip install -r requirements.txt
 python app.py
 ```
 
+## USB で別 PC に持っていく方法
+
+このプロジェクトは、フォルダごと USB にコピーして別の Windows PC へ移せるようにしてあります。
+
+1. 元の PC でフォルダを USB にコピーします。
+2. 別 PC でコピー先フォルダを開き、`start_app.bat` をダブルクリックします。
+3. 初回起動時は、その PC 用の `.venv` を自動で作成し、依存関係を入れてからアプリを起動します。
+
+補足:
+
+- 別 PC 側に Python 3.11 以上が入っていれば、そのまま自己セットアップできます。
+- オフライン PC で使いたい場合は、事前に `vendor/wheels/` を用意しておくと `start_app.bat` がローカルのホイールからインストールします。
+- USB 配布用コピーを作る補助として `prepare_usb_bundle.ps1` を追加しています。
+- `.venv` は移植しない前提です。コピー先 PC で自動再作成されます。
+- `prepare_usb_bundle.ps1` は DB と既存データを残したままコピーするので、そのまま別 PC で作業を続けられます。
+
 ## 最小動作版でできること
 
 1. MIP / MIP 使用記録 / セッション / 条件の登録
@@ -74,3 +90,4 @@ python -m unittest discover -s tests -p "test_*.py"
 - ローカル設定は `config/local_config.json` に上書き保存できます。
 - 本番 DB は `database/` 配下に作成されますが `.gitignore` により追跡されません。
 - 新規 ID は `MIP-20260407-0001-KD` のように、種別プレフィックスと日付が分かる形式で生成されます。
+- USB 移送向けの詳細は `docs/portable_setup.md` を参照してください。
