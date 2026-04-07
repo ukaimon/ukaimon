@@ -102,3 +102,27 @@ def select_tree_record(tree: ttk.Treeview, record_id: str, column_index: int = 0
             tree.see(item_id)
             return True
     return False
+
+
+def get_selected_tree_values(tree: ttk.Treeview, column_index: int = 0) -> list[str]:
+    selected_values: list[str] = []
+    for item_id in tree.selection():
+        values = tree.item(item_id, "values")
+        if column_index < len(values):
+            selected_values.append(str(values[column_index]))
+    return selected_values
+
+
+def select_all_tree_rows(tree: ttk.Treeview) -> str:
+    item_ids = tree.get_children()
+    if item_ids:
+        tree.selection_set(item_ids)
+        tree.focus(item_ids[0])
+        tree.see(item_ids[0])
+    return "break"
+
+
+def enable_bulk_tree_actions(tree: ttk.Treeview) -> None:
+    tree.configure(selectmode="extended")
+    tree.bind("<Control-a>", lambda _event: select_all_tree_rows(tree), add="+")
+    tree.bind("<Control-A>", lambda _event: select_all_tree_rows(tree), add="+")

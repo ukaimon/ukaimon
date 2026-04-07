@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
-from gui.navigation import extract_tree_navigation_target, select_tree_record
+from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_target, get_selected_tree_values, select_tree_record
 from utils.date_utils import today_string
 
 
@@ -54,6 +54,7 @@ class SessionTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=160)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        enable_bulk_tree_actions(self.tree)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _apply_default_operator(self, force: bool = False) -> None:
@@ -66,10 +67,13 @@ class SessionTab(ttk.Frame):
         self._apply_default_operator(force=True)
 
     def _selected_session_id(self) -> str | None:
-        selection = self.tree.selection()
-        if not selection:
+        selected_ids = self._selected_session_ids()
+        if not selected_ids:
             return None
-        return str(self.tree.item(selection[0], "values")[0])
+        return selected_ids[0]
+
+    def _selected_session_ids(self) -> list[str]:
+        return get_selected_tree_values(self.tree)
 
     def _load_selected(self) -> None:
         session_id = self._selected_session_id()
@@ -136,16 +140,18 @@ class SessionTab(ttk.Frame):
             messagebox.showerror("セッション複製", str(error))
 
     def _delete_selected(self) -> None:
-        session_id = self._selected_session_id()
-        if not session_id:
+        session_ids = self._selected_session_ids()
+        if not session_ids:
             return
-        if not messagebox.askyesno("セッション削除", "選択したセッションを削除しますか？"):
+        label = "選択したセッションを削除しますか？" if len(session_ids) == 1 else f"選択した {len(session_ids)} 件のセッションを削除しますか？"
+        if not messagebox.askyesno("セッション削除", label):
             return
         try:
-            message = self.services.delete_session(session_id)
+            messages = [self.services.delete_session(session_id) for session_id in session_ids]
             self._reset_form()
             self.refresh_app()
-            messagebox.showinfo("セッション削除", message)
+            summary = messages[0] if len(messages) == 1 else f"{len(session_ids)} 件を削除しました。"
+            messagebox.showinfo("セッション削除", summary)
         except Exception as error:
             messagebox.showerror("セッション削除", str(error))
 

@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
-from gui.navigation import extract_tree_navigation_target, select_tree_record
+from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_target, get_selected_tree_values, select_tree_record
 
 
 class MeasurementTab(ttk.Frame):
@@ -56,13 +56,17 @@ class MeasurementTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140 if column != "raw_file_path" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        enable_bulk_tree_actions(self.tree)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _selected_measurement_id(self) -> str | None:
-        selection = self.tree.selection()
-        if not selection:
+        selected_ids = self._selected_measurement_ids()
+        if not selected_ids:
             return None
-        return str(self.tree.item(selection[0], "values")[0])
+        return selected_ids[0]
+
+    def _selected_measurement_ids(self) -> list[str]:
+        return get_selected_tree_values(self.tree)
 
     def _refresh_condition_choices(self) -> None:
         session_id = self.session_id_var.get()
@@ -127,16 +131,18 @@ class MeasurementTab(ttk.Frame):
             messagebox.showerror("測定保存", str(error))
 
     def _delete_selected(self) -> None:
-        measurement_id = self._selected_measurement_id()
-        if not measurement_id:
+        measurement_ids = self._selected_measurement_ids()
+        if not measurement_ids:
             return
-        if not messagebox.askyesno("測定削除", "選択した測定を削除しますか？"):
+        label = "選択した測定を削除しますか？" if len(measurement_ids) == 1 else f"選択した {len(measurement_ids)} 件の測定を削除しますか？"
+        if not messagebox.askyesno("測定削除", label):
             return
         try:
-            message = self.services.delete_measurement(measurement_id)
+            messages = [self.services.delete_measurement(measurement_id) for measurement_id in measurement_ids]
             self._reset_form()
             self.refresh_app()
-            messagebox.showinfo("測定削除", message)
+            summary = messages[0] if len(messages) == 1 else f"{len(measurement_ids)} 件を削除しました。"
+            messagebox.showinfo("測定削除", summary)
         except Exception as error:
             messagebox.showerror("測定削除", str(error))
 

@@ -5,7 +5,7 @@ from tkinter import messagebox, ttk
 
 from core.models import PlannedStatus
 from core.services import AppServices
-from gui.navigation import extract_tree_navigation_target, select_tree_record
+from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_target, get_selected_tree_values, select_tree_record
 
 
 class BatchPlanTab(ttk.Frame):
@@ -80,13 +80,17 @@ class BatchPlanTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        enable_bulk_tree_actions(self.tree)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _selected_batch_item_id(self) -> str | None:
-        selection = self.tree.selection()
-        if not selection:
+        selected_ids = self._selected_batch_item_ids()
+        if not selected_ids:
             return None
-        return str(self.tree.item(selection[0], "values")[0])
+        return selected_ids[0]
+
+    def _selected_batch_item_ids(self) -> list[str]:
+        return get_selected_tree_values(self.tree)
 
     def _refresh_edit_condition_choices(self) -> None:
         session_id = self.edit_session_id_var.get()
@@ -164,16 +168,18 @@ class BatchPlanTab(ttk.Frame):
             messagebox.showerror("バッチ計画編集", str(error))
 
     def _delete_selected(self) -> None:
-        batch_item_id = self._selected_batch_item_id()
-        if not batch_item_id:
+        batch_item_ids = self._selected_batch_item_ids()
+        if not batch_item_ids:
             return
-        if not messagebox.askyesno("バッチ計画削除", "選択した項目を削除しますか？"):
+        label = "選択した項目を削除しますか？" if len(batch_item_ids) == 1 else f"選択した {len(batch_item_ids)} 件の項目を削除しますか？"
+        if not messagebox.askyesno("バッチ計画削除", label):
             return
         try:
-            message = self.services.delete_batch_item(batch_item_id)
+            messages = [self.services.delete_batch_item(batch_item_id) for batch_item_id in batch_item_ids]
             self._reset_form()
             self.refresh_app()
-            messagebox.showinfo("バッチ計画削除", message)
+            summary = messages[0] if len(messages) == 1 else f"{len(batch_item_ids)} 件を削除しました。"
+            messagebox.showinfo("バッチ計画削除", summary)
         except Exception as error:
             messagebox.showerror("バッチ計画削除", str(error))
 

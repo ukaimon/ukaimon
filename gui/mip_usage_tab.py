@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
-from gui.navigation import extract_tree_navigation_target, select_tree_record
+from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_target, get_selected_tree_values, select_tree_record
 from utils.date_utils import today_string
 
 
@@ -51,6 +51,7 @@ class MipUsageTab(ttk.Frame):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140 if column != "note" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        enable_bulk_tree_actions(self.tree)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _apply_default_operator(self, force: bool = False) -> None:
@@ -63,10 +64,13 @@ class MipUsageTab(ttk.Frame):
         self._apply_default_operator(force=True)
 
     def _selected_usage_id(self) -> str | None:
-        selection = self.tree.selection()
-        if not selection:
+        selected_ids = self._selected_usage_ids()
+        if not selected_ids:
             return None
-        return str(self.tree.item(selection[0], "values")[0])
+        return selected_ids[0]
+
+    def _selected_usage_ids(self) -> list[str]:
+        return get_selected_tree_values(self.tree)
 
     def _load_selected(self) -> None:
         usage_id = self._selected_usage_id()
@@ -127,16 +131,22 @@ class MipUsageTab(ttk.Frame):
             messagebox.showerror("MIP 使用記録複製", str(error))
 
     def _delete_selected(self) -> None:
-        usage_id = self._selected_usage_id()
-        if not usage_id:
+        usage_ids = self._selected_usage_ids()
+        if not usage_ids:
             return
-        if not messagebox.askyesno("MIP 使用記録削除", "選択した MIP 使用記録を削除しますか？"):
+        label = (
+            "選択した MIP 使用記録を削除しますか？"
+            if len(usage_ids) == 1
+            else f"選択した {len(usage_ids)} 件の MIP 使用記録を削除しますか？"
+        )
+        if not messagebox.askyesno("MIP 使用記録削除", label):
             return
         try:
-            message = self.services.delete_mip_usage(usage_id)
+            messages = [self.services.delete_mip_usage(usage_id) for usage_id in usage_ids]
             self._reset_form()
             self.refresh_app()
-            messagebox.showinfo("MIP 使用記録削除", message)
+            summary = messages[0] if len(messages) == 1 else f"{len(usage_ids)} 件を削除しました。"
+            messagebox.showinfo("MIP 使用記録削除", summary)
         except Exception as error:
             messagebox.showerror("MIP 使用記録削除", str(error))
 
