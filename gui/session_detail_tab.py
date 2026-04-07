@@ -50,7 +50,7 @@ class SessionDetailTab(ttk.Frame):
             tables,
             columns=self.measurement_columns,
             show="headings",
-            height=10,
+            height=8,
         )
         for column, heading in zip(
             self.measurement_columns,
@@ -58,8 +58,40 @@ class SessionDetailTab(ttk.Frame):
         ):
             self.measurement_tree.heading(column, text=heading)
             self.measurement_tree.column(column, width=140 if column != "raw_file_path" else 280)
-        self.measurement_tree.pack(fill="both", expand=True)
+        self.measurement_tree.pack(fill="both", expand=True, pady=(0, 12))
         self.measurement_tree.bind("<Double-1>", self._handle_measurement_double_click)
+
+        ttk.Label(tables, text="解析結果一覧").pack(anchor="w", pady=(0, 4))
+        self.analysis_columns = (
+            "measurement_id",
+            "analysis_method",
+            "representative_current_a",
+            "representative_potential_v",
+            "oxidation_peak_current_a",
+            "reduction_peak_current_a",
+            "delta_ep_v",
+            "quality_flag",
+        )
+        self.analysis_tree = ttk.Treeview(
+            tables,
+            columns=self.analysis_columns,
+            show="headings",
+            height=7,
+        )
+        for column, heading, width in (
+            ("measurement_id", "測定 ID", 150),
+            ("analysis_method", "解析法", 90),
+            ("representative_current_a", "代表電流", 110),
+            ("representative_potential_v", "代表電位", 110),
+            ("oxidation_peak_current_a", "酸化ピーク", 110),
+            ("reduction_peak_current_a", "還元ピーク", 110),
+            ("delta_ep_v", "ΔEp", 90),
+            ("quality_flag", "品質", 90),
+        ):
+            self.analysis_tree.heading(column, text=heading)
+            self.analysis_tree.column(column, width=width)
+        self.analysis_tree.pack(fill="x")
+        self.analysis_tree.bind("<Double-1>", self._handle_analysis_double_click)
 
     def _aggregate(self) -> None:
         try:
@@ -98,6 +130,14 @@ class SessionDetailTab(ttk.Frame):
         if target:
             navigator(*target)
 
+    def _handle_analysis_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.analysis_tree, self.analysis_columns, event, "session_detail_measurement")
+        if target:
+            navigator(*target)
+
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]
         self.session_combo["values"] = session_ids
@@ -113,7 +153,7 @@ class SessionDetailTab(ttk.Frame):
         )
         condition_warnings = detail.get("condition_warnings", {})
 
-        for tree in (self.condition_tree, self.measurement_tree):
+        for tree in (self.condition_tree, self.measurement_tree, self.analysis_tree):
             for item in tree.get_children():
                 tree.delete(item)
 
@@ -143,5 +183,20 @@ class SessionDetailTab(ttk.Frame):
                     row.get("measured_at", ""),
                     row.get("final_quality_flag", ""),
                     row.get("raw_file_path", ""),
+                ),
+            )
+        for row in detail["analysis_results"]:
+            self.analysis_tree.insert(
+                "",
+                "end",
+                values=(
+                    row.get("measurement_id", ""),
+                    row.get("analysis_method", ""),
+                    row.get("representative_current_a", ""),
+                    row.get("representative_potential_v", ""),
+                    row.get("oxidation_peak_current_a", ""),
+                    row.get("reduction_peak_current_a", ""),
+                    row.get("delta_ep_v", ""),
+                    row.get("quality_flag", ""),
                 ),
             )
