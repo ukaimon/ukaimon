@@ -12,6 +12,7 @@ from gui.home_tab import HomeTab
 from gui.measurement_tab import MeasurementTab
 from gui.mip_tab import MipTab
 from gui.mip_usage_tab import MipUsageTab
+from gui.navigation import RECORD_TYPE_TO_TAB_TITLE
 from gui.session_detail_tab import SessionDetailTab
 from gui.session_tab import SessionTab
 from gui.watcher_tab import WatcherTab
@@ -29,24 +30,41 @@ class MainWindow:
         style.configure("TLabel", font=("Yu Gothic UI", 10))
         style.configure("TButton", font=("Yu Gothic UI", 10))
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True)
 
         self.tabs = [
-            ("ホーム", HomeTab(notebook, services, self.refresh_all)),
-            ("MIP 管理", MipTab(notebook, services, self.refresh_all)),
-            ("MIP 使用記録", MipUsageTab(notebook, services, self.refresh_all)),
-            ("セッション管理", SessionTab(notebook, services, self.refresh_all)),
-            ("条件管理", ConditionTab(notebook, services, self.refresh_all)),
-            ("バッチ実行計画", BatchPlanTab(notebook, services, self.refresh_all)),
-            ("測定追加", MeasurementTab(notebook, services, self.refresh_all)),
-            (".ids 監視", WatcherTab(notebook, services, self.refresh_all)),
-            ("セッション詳細", SessionDetailTab(notebook, services, self.refresh_all)),
-            ("横断比較", CrossReportTab(notebook, services, self.refresh_all)),
-            ("レポート出力", ExportTab(notebook, services, self.refresh_all)),
+            ("ホーム", HomeTab(self.notebook, services, self.refresh_all)),
+            ("MIP 管理", MipTab(self.notebook, services, self.refresh_all)),
+            ("MIP 使用記録", MipUsageTab(self.notebook, services, self.refresh_all)),
+            ("セッション管理", SessionTab(self.notebook, services, self.refresh_all)),
+            ("条件管理", ConditionTab(self.notebook, services, self.refresh_all)),
+            ("バッチ実行計画", BatchPlanTab(self.notebook, services, self.refresh_all)),
+            ("測定追加", MeasurementTab(self.notebook, services, self.refresh_all)),
+            (".ids 監視", WatcherTab(self.notebook, services, self.refresh_all)),
+            ("セッション詳細", SessionDetailTab(self.notebook, services, self.refresh_all)),
+            ("横断比較", CrossReportTab(self.notebook, services, self.refresh_all)),
+            ("レポート出力", ExportTab(self.notebook, services, self.refresh_all)),
         ]
+        self.tabs_by_title: dict[str, ttk.Frame] = {}
         for title, tab in self.tabs:
-            notebook.add(tab, text=title)
+            self.notebook.add(tab, text=title)
+            self.tabs_by_title[title] = tab
+            setattr(tab, "navigate_to_record", self.navigate_to_record)
+
+    def navigate_to_record(self, record_type: str, record_id: str) -> None:
+        tab_title = RECORD_TYPE_TO_TAB_TITLE.get(record_type)
+        if not tab_title or not record_id:
+            return
+        tab = self.tabs_by_title.get(tab_title)
+        if not tab:
+            return
+        if hasattr(tab, "refresh_tab"):
+            tab.refresh_tab()
+        self.notebook.select(tab)
+        focus_record = getattr(tab, "focus_record", None)
+        if callable(focus_record):
+            focus_record(record_id)
 
     def refresh_all(self) -> None:
         for _, tab in self.tabs:
