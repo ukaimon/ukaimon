@@ -8,6 +8,10 @@ from gui.navigation import enable_bulk_tree_actions, extract_tree_navigation_tar
 from utils.date_utils import today_string
 
 
+DEFAULT_SESSION_NAME = "3濃度測定"
+DEFAULT_ANALYTE = "ヒスタミン"
+
+
 class SessionTab(ttk.Frame):
     def __init__(self, master: ttk.Notebook, services: AppServices, refresh_app) -> None:
         super().__init__(master)
@@ -17,8 +21,8 @@ class SessionTab(ttk.Frame):
         self.save_button_label = tk.StringVar(value="新規追加")
         self.mip_usage_id_var = tk.StringVar()
         self.session_date_var = tk.StringVar(value=today_string())
-        self.analyte_var = tk.StringVar()
-        self.session_name_var = tk.StringVar()
+        self.analyte_var = tk.StringVar(value=DEFAULT_ANALYTE)
+        self.session_name_var = tk.StringVar(value=DEFAULT_SESSION_NAME)
         self.method_var = tk.StringVar(value="CV")
         self.operator_var = tk.StringVar()
 
@@ -100,8 +104,8 @@ class SessionTab(ttk.Frame):
         self.editing_session_id = None
         self.save_button_label.set("新規追加")
         self.session_date_var.set(today_string())
-        self.analyte_var.set("")
-        self.session_name_var.set("")
+        self.analyte_var.set(DEFAULT_ANALYTE)
+        self.session_name_var.set(DEFAULT_SESSION_NAME)
         self.method_var.set("CV")
         self.operator_var.set("")
         self._apply_default_operator(force=True)
