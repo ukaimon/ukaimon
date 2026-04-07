@@ -81,6 +81,7 @@ class BatchPlanTab(ttk.Frame):
             self.tree.column(column, width=140)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
         enable_bulk_tree_actions(self.tree)
+        self.tree.bind("<<TreeviewSelect>>", self._handle_tree_select)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _selected_batch_item_id(self) -> str | None:
@@ -190,6 +191,10 @@ class BatchPlanTab(ttk.Frame):
         target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "batch_plan")
         if target:
             navigator(*target)
+
+    def _handle_tree_select(self, _event: tk.Event) -> None:
+        if len(self._selected_batch_item_ids()) == 1:
+            self._load_selected()
 
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]
