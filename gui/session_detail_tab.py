@@ -88,7 +88,7 @@ class SessionDetailTab(ttk.Frame):
         detail = self.services.get_session_detail(self.session_id_var.get())
         session = detail["session"]
         self.summary_var.set(
-            f"{session['session_date']} / {session['session_name']} / analyte={session['analyte']} / method={session.get('method_default', '')}"
+            f"{session['session_date']} / {session['session_name']} / 測定対象物質={session['analyte']} / 測定法={session.get('method_default', '')}"
         )
 
         for tree in (self.condition_tree, self.measurement_tree):

@@ -26,7 +26,7 @@ class SessionTab(ttk.Frame):
         self.usage_combo.grid(row=0, column=1, sticky="w")
         ttk.Label(form, text="測定日").grid(row=0, column=2, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.session_date_var, width=16).grid(row=0, column=3, sticky="w")
-        ttk.Label(form, text="Analyte").grid(row=0, column=4, sticky="w", padx=6, pady=6)
+        ttk.Label(form, text="測定対象物質").grid(row=0, column=4, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.analyte_var, width=24).grid(row=0, column=5, sticky="w")
         ttk.Label(form, text="セッション名").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.session_name_var, width=28).grid(row=1, column=1, sticky="w")
@@ -42,7 +42,7 @@ class SessionTab(ttk.Frame):
 
         columns = ("session_id", "session_date", "analyte", "session_name", "mip_usage_id", "method_default")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=12)
-        headings = ["セッション ID", "測定日", "Analyte", "セッション名", "使用 ID", "測定法"]
+        headings = ["セッション ID", "測定日", "測定対象物質", "セッション名", "使用 ID", "測定法"]
         for column, heading in zip(columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=160)

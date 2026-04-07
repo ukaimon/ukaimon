@@ -20,7 +20,7 @@ class CrossReportTab(ttk.Frame):
         controls = ttk.LabelFrame(self, text="横断検索・比較")
         controls.pack(fill="x", padx=12, pady=12)
         entries = [
-            ("Analyte", self.analyte_var),
+            ("測定対象物質", self.analyte_var),
             ("測定法", self.method_var),
             ("キーワード", self.keyword_var),
             ("品質", self.quality_var),
@@ -48,7 +48,7 @@ class CrossReportTab(ttk.Frame):
             "representative_current_a",
         )
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=18)
-        headings = ["測定 ID", "セッション", "Analyte", "条件", "濃度", "測定法", "品質", "代表電流"]
+        headings = ["測定 ID", "セッション", "測定対象物質", "条件", "濃度", "測定法", "品質", "代表電流"]
         for column, heading in zip(columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140)
