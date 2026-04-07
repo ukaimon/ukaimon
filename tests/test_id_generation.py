@@ -22,6 +22,14 @@ class IdGenerationTests(unittest.TestCase):
         generated_ids = [generate_condition_id(0, "ppm") for _ in range(5)]
         self.assertEqual(len(generated_ids), len(set(generated_ids)))
 
+    def test_generate_condition_id_trims_trailing_decimal_zero(self) -> None:
+        generated_id = generate_condition_id(10.0, "ppm")
+        self.assertRegex(generated_id, r"^COND-\d{8}-10ppm-\d{4}-[A-Z]{2}$")
+
+    def test_generate_condition_id_zero_uses_simple_zero_token(self) -> None:
+        generated_id = generate_condition_id(0.0, "ppm")
+        self.assertRegex(generated_id, r"^COND-\d{8}-0ppm-\d{4}-[A-Z]{2}$")
+
 
 if __name__ == "__main__":
     unittest.main()

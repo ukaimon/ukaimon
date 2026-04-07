@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -32,6 +33,16 @@ def _normalize_condition_token(concentration_value: object, concentration_unit: 
     unit_text = str(concentration_unit or "").strip().lower()
     if not value_text:
         value_text = "na"
+    else:
+        try:
+            normalized_decimal = format(Decimal(value_text).normalize(), "f")
+            if "." in normalized_decimal:
+                normalized_decimal = normalized_decimal.rstrip("0").rstrip(".")
+            if normalized_decimal in {"-0", "+0"}:
+                normalized_decimal = "0"
+            value_text = normalized_decimal
+        except (InvalidOperation, ValueError):
+            pass
     value_text = value_text.replace("-", "m").replace(".", "p")
     value_text = "".join(character for character in value_text if character.isalnum() or character == "p")
     unit_text = "".join(character for character in unit_text if character.isalnum())
