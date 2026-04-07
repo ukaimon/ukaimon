@@ -23,6 +23,8 @@ SCHEMA_STATEMENTS = [
         operator TEXT NOT NULL,
         note TEXT,
         tags TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -41,6 +43,8 @@ SCHEMA_STATEMENTS = [
         operator TEXT,
         note TEXT,
         tags TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (mip_id) REFERENCES mip_records (mip_id)
@@ -59,6 +63,8 @@ SCHEMA_STATEMENTS = [
         operator TEXT,
         tags TEXT,
         status TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (mip_usage_id) REFERENCES mip_usage_records (mip_usage_id)
@@ -80,6 +86,8 @@ SCHEMA_STATEMENTS = [
         condition_status TEXT,
         common_note TEXT,
         tags TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id)
@@ -250,8 +258,27 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_batch_session ON batch_plan_items (session_id, planned_order)",
     "CREATE INDEX IF NOT EXISTS idx_measurements_condition ON measurements (condition_id, rep_no)",
     "CREATE INDEX IF NOT EXISTS idx_measurements_session ON measurements (session_id, measured_at)",
-    "CREATE INDEX IF NOT EXISTS idx_analysis_measurement ON analysis_results (measurement_id)"
+    "CREATE INDEX IF NOT EXISTS idx_analysis_measurement ON analysis_results (measurement_id)",
 ]
+
+SOFT_DELETE_COLUMNS = {
+    "mip_records": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+    "mip_usage_records": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+    "sessions": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+    "conditions": {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+    },
+}
 
 
 class DatabaseManager:
@@ -269,7 +296,20 @@ class DatabaseManager:
         with self.connect() as connection:
             for statement in SCHEMA_STATEMENTS:
                 connection.execute(statement)
+            self._apply_soft_delete_migrations(connection)
             connection.commit()
+
+    def _apply_soft_delete_migrations(self, connection: sqlite3.Connection) -> None:
+        for table_name, columns in SOFT_DELETE_COLUMNS.items():
+            existing_columns = {
+                row["name"]
+                for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            for column_name, column_definition in columns.items():
+                if column_name not in existing_columns:
+                    connection.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+                    )
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self.connect() as connection:

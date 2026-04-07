@@ -80,14 +80,10 @@ class AppServices:
         return self.repository.list_records("conditions", "created_at DESC")
 
     def list_batch_items(self, session_id: str | None = None) -> list[dict[str, Any]]:
-        if session_id:
-            return self.repository.list_records("batch_plan_items", "planned_order ASC", "session_id = ?", (session_id,))
-        return self.repository.list_records("batch_plan_items", "created_at DESC")
+        return self.repository.list_active_batch_items(session_id)
 
     def list_measurements(self, session_id: str | None = None) -> list[dict[str, Any]]:
-        if session_id:
-            return self.repository.list_records("measurements", "measured_at DESC, created_at DESC", "session_id = ?", (session_id,))
-        return self.repository.list_records("measurements", "created_at DESC")
+        return self.repository.list_active_measurements(session_id)
 
     def home_snapshot(self) -> dict[str, Any]:
         return self.repository.get_home_snapshot()
@@ -98,8 +94,20 @@ class AppServices:
         self.repository.insert_record("mip_records", {"mip_id": mip_id, **payload})
         return mip_id
 
+    def update_mip(self, mip_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["template_name", "preparation_date", "operator"])
+        self.repository.update_record("mip_records", mip_id, payload)
+
     def duplicate_mip(self, mip_id: str) -> str:
         return self.repository.duplicate_record("mip_records", mip_id, "MIP")
+
+    def delete_mip(self, mip_id: str) -> str:
+        summary = self.repository.get_mip_dependency_summary(mip_id)
+        if summary["usage_count"] == 0:
+            self.repository.delete_record_physical("mip_records", mip_id)
+            return "MIP を物理削除しました。"
+        self.repository.logical_delete_mip(mip_id)
+        return "関連データがあるため、MIP を論理削除しました。"
 
     def create_mip_usage(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["mip_id"])
@@ -108,8 +116,21 @@ class AppServices:
         self.repository.insert_record("mip_usage_records", {"mip_usage_id": mip_usage_id, **payload})
         return mip_usage_id
 
+    def update_mip_usage(self, mip_usage_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["mip_id"])
+        require_any(payload, ["cp_preparation_date", "coating_date"])
+        self.repository.update_record("mip_usage_records", mip_usage_id, payload)
+
     def duplicate_mip_usage(self, mip_usage_id: str) -> str:
         return self.repository.duplicate_record("mip_usage_records", mip_usage_id, "MUSE")
+
+    def delete_mip_usage(self, mip_usage_id: str) -> str:
+        summary = self.repository.get_mip_usage_dependency_summary(mip_usage_id)
+        if summary["session_count"] == 0:
+            self.repository.delete_record_physical("mip_usage_records", mip_usage_id)
+            return "MIP 使用記録を物理削除しました。"
+        self.repository.logical_delete_mip_usage(mip_usage_id)
+        return "関連データがあるため、MIP 使用記録を論理削除しました。"
 
     def create_session(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["session_date", "analyte", "mip_usage_id"])
@@ -119,10 +140,45 @@ class AppServices:
         self.repository.insert_record("sessions", {"session_id": session_id, **payload})
         return session_id
 
+    def update_session(self, session_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["session_date", "analyte", "mip_usage_id"])
+        current = self.repository.get_record("sessions", session_id)
+        if not current:
+            raise ValueError(f"セッションが見つかりません: {session_id}")
+        self.repository.update_record("sessions", session_id, payload)
+
+        if payload["analyte"] != current.get("analyte"):
+            self.repository.database.execute(
+                """
+                UPDATE conditions
+                SET analyte = ?, updated_at = ?
+                WHERE session_id = ? AND COALESCE(is_deleted, 0) = 0
+                """,
+                (payload["analyte"], now_iso(), session_id),
+            )
+        if payload["mip_usage_id"] != current.get("mip_usage_id"):
+            self.repository.database.execute(
+                """
+                UPDATE measurements
+                SET mip_usage_id = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (payload["mip_usage_id"], now_iso(), session_id),
+            )
+        self.aggregate_session(session_id)
+
     def duplicate_session(self, session_id: str) -> str:
         new_id = self.repository.duplicate_record("sessions", session_id, "SES")
         self.repository.update_record("sessions", new_id, {"status": "draft"})
         return new_id
+
+    def delete_session(self, session_id: str) -> str:
+        summary = self.repository.get_session_dependency_summary(session_id)
+        if summary["measurement_count"] == 0:
+            self.repository.purge_session(session_id)
+            return "関連する条件とバッチ計画を含めて、セッションを物理削除しました。"
+        self.repository.logical_delete_session(session_id)
+        return "測定データがあるため、セッションを論理削除しました。"
 
     def create_condition(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["session_id", "concentration_value", "concentration_unit", "method"])
@@ -133,6 +189,50 @@ class AppServices:
         self.repository.insert_record("conditions", {"condition_id": condition_id, **payload})
         self.repository.refresh_condition_stats(condition_id=condition_id)
         return condition_id
+
+    def update_condition(self, condition_id: str, payload: dict[str, Any]) -> None:
+        require_fields(payload, ["session_id", "concentration_value", "concentration_unit", "method"])
+        current = self.repository.get_record("conditions", condition_id)
+        if not current:
+            raise ValueError(f"条件が見つかりません: {condition_id}")
+        target_session = self.repository.get_record("sessions", str(payload["session_id"]))
+        payload.setdefault("analyte", target_session["analyte"] if target_session else current.get("analyte", ""))
+
+        if str(payload["session_id"]) != str(current["session_id"]):
+            summary = self.repository.get_condition_dependency_summary(condition_id)
+            if summary["measurement_count"] > 0:
+                raise ValueError("測定データがある条件はセッションを変更できません。")
+            update_time = now_iso()
+            self.repository.database.execute(
+                """
+                UPDATE batch_plan_items
+                SET session_id = ?, updated_at = ?
+                WHERE condition_id = ?
+                """,
+                (payload["session_id"], update_time, condition_id),
+            )
+            self.repository.database.execute(
+                """
+                UPDATE aggregated_results
+                SET session_id = ?
+                WHERE condition_id = ?
+                """,
+                (payload["session_id"], condition_id),
+            )
+            self.repository.database.execute(
+                """
+                UPDATE mean_voltammogram_records
+                SET session_id = ?
+                WHERE condition_id = ?
+                """,
+                (payload["session_id"], condition_id),
+            )
+        self.repository.update_record("conditions", condition_id, payload)
+        self.repository.refresh_condition_stats(condition_id=condition_id)
+        affected_session_ids = {str(current["session_id"]), str(payload["session_id"])}
+        for session_id in affected_session_ids:
+            if self.repository.get_record("sessions", session_id):
+                self.aggregate_session(session_id)
 
     def duplicate_condition(self, condition_id: str) -> str:
         new_id = self.repository.duplicate_record("conditions", condition_id, "COND")
@@ -148,6 +248,14 @@ class AppServices:
             },
         )
         return new_id
+
+    def delete_condition(self, condition_id: str) -> str:
+        summary = self.repository.get_condition_dependency_summary(condition_id)
+        if summary["measurement_count"] == 0:
+            self.repository.purge_condition(condition_id)
+            return "条件を物理削除しました。"
+        self.repository.mark_deleted("conditions", condition_id)
+        return "測定データがあるため、条件を論理削除しました。"
 
     def generate_batch_plan(
         self,
@@ -324,18 +432,14 @@ class AppServices:
 
     def aggregate_session(self, session_id: str) -> list[dict[str, Any]]:
         session = self.repository.get_record("sessions", session_id)
-        if not session:
-            raise ValueError(f"セッションが見つかりません: {session_id}")
+        if not session or int(session.get("is_deleted", 0)) == 1:
+            return []
         mip_usage = self.repository.get_record("mip_usage_records", session["mip_usage_id"])
         mip_id = mip_usage["mip_id"] if mip_usage else None
         aggregates: list[dict[str, Any]] = []
         for condition in self.list_conditions(session_id):
-            measurement_rows = self.repository.list_records(
-                "measurements",
-                "rep_no ASC",
-                "condition_id = ?",
-                (condition["condition_id"],),
-            )
+            measurement_rows = self.repository.list_active_measurements(session_id)
+            measurement_rows = [row for row in measurement_rows if row["condition_id"] == condition["condition_id"]]
             analysis_rows = self.repository.database.fetch_all(
                 """
                 SELECT *
@@ -371,7 +475,7 @@ class AppServices:
 
         payloads: list[dict[str, Any]] = []
         for condition in condition_rows:
-            if not condition:
+            if not condition or int(condition.get("is_deleted", 0)) == 1:
                 continue
             measurement_rows = self.repository.get_condition_measurements(
                 condition["condition_id"],
@@ -434,7 +538,12 @@ class AppServices:
         bundle = self.repository.get_session_bundle(session_id)
         directories = session_output_directories(self.root_path, session_id)
         measurements_frame = self.repository.database.query_frame(
-            "SELECT * FROM measurements WHERE session_id = ? ORDER BY rep_no ASC",
+            """
+            SELECT *
+            FROM measurements
+            WHERE session_id = ?
+            ORDER BY rep_no ASC
+            """,
             (session_id,),
         )
         aggregates_frame = self.repository.database.query_frame(

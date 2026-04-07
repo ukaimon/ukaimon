@@ -42,6 +42,8 @@ TIMESTAMP_COLUMNS = {
     "error_logs": ("created_at",),
 }
 
+SOFT_DELETABLE_TABLES = {"mip_records", "mip_usage_records", "sessions", "conditions"}
+
 
 class ElectrochemRepository:
     def __init__(self, database: DatabaseManager) -> None:
@@ -50,11 +52,23 @@ class ElectrochemRepository:
     def initialize(self) -> None:
         self.database.initialize()
 
+    def _supports_soft_delete(self, table_name: str) -> bool:
+        return table_name in SOFT_DELETABLE_TABLES
+
+    def _active_clause(self, table_name: str, alias: str | None = None) -> str:
+        if not self._supports_soft_delete(table_name):
+            return "1 = 1"
+        prefix = f"{alias}." if alias else ""
+        return f"COALESCE({prefix}is_deleted, 0) = 0"
+
     def _with_timestamps(self, table_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = now_iso()
         result = dict(payload)
         for column_name in TIMESTAMP_COLUMNS.get(table_name, ()):
             result.setdefault(column_name, now)
+        if self._supports_soft_delete(table_name):
+            result.setdefault("is_deleted", 0)
+            result.setdefault("deleted_at", None)
         return result
 
     def insert_record(self, table_name: str, payload: dict[str, Any]) -> None:
@@ -66,6 +80,36 @@ class ElectrochemRepository:
         if "updated_at" in TIMESTAMP_COLUMNS.get(table_name, ()):
             data["updated_at"] = now_iso()
         self.database.update(table_name, data, f"{id_column} = ?", (record_id,))
+
+    def mark_deleted(self, table_name: str, record_id: str) -> None:
+        if not self._supports_soft_delete(table_name):
+            raise ValueError(f"{table_name} は論理削除に対応していません。")
+        self.update_record(
+            table_name,
+            record_id,
+            {
+                "is_deleted": 1,
+                "deleted_at": now_iso(),
+            },
+        )
+
+    def bulk_mark_deleted(self, table_name: str, where_clause: str, params: tuple[Any, ...]) -> None:
+        if not self._supports_soft_delete(table_name):
+            raise ValueError(f"{table_name} は論理削除に対応していません。")
+        now = now_iso()
+        self.database.execute(
+            f"""
+            UPDATE {table_name}
+            SET is_deleted = 1,
+                deleted_at = COALESCE(deleted_at, ?),
+                updated_at = ?
+            WHERE {where_clause} AND COALESCE(is_deleted, 0) = 0
+            """,
+            (now, now, *params),
+        )
+
+    def delete_record_physical(self, table_name: str, record_id: str) -> None:
+        self.database.delete(table_name, f"{TABLE_ID_COLUMNS[table_name]} = ?", (record_id,))
 
     def get_record(self, table_name: str, record_id: str) -> dict[str, Any] | None:
         id_column = TABLE_ID_COLUMNS[table_name]
@@ -82,8 +126,13 @@ class ElectrochemRepository:
         params: tuple[Any, ...] = (),
     ) -> list[dict[str, Any]]:
         sql = f"SELECT * FROM {table_name}"
+        conditions: list[str] = []
+        if self._supports_soft_delete(table_name):
+            conditions.append(self._active_clause(table_name))
         if where_clause:
-            sql += f" WHERE {where_clause}"
+            conditions.append(where_clause)
+        if conditions:
+            sql += " WHERE " + " AND ".join(f"({condition})" for condition in conditions)
         sql += f" ORDER BY {order_by}"
         return self.database.fetch_all(sql, params)
 
@@ -94,7 +143,7 @@ class ElectrochemRepository:
         new_id = generate_id(prefix)
         cloned = dict(record)
         cloned[TABLE_ID_COLUMNS[table_name]] = new_id
-        for column_name in ("created_at", "updated_at", "assigned_measurement_id"):
+        for column_name in ("created_at", "updated_at", "assigned_measurement_id", "is_deleted", "deleted_at"):
             cloned.pop(column_name, None)
         if table_name == "batch_plan_items":
             cloned["planned_status"] = PlannedStatus.WAITING.value
@@ -109,16 +158,20 @@ class ElectrochemRepository:
         return int(row["max_rep_no"]) + 1 if row else 1
 
     def get_next_waiting_batch_item(self, session_id: str | None = None) -> dict[str, Any] | None:
-        sql = """
-            SELECT *
-            FROM batch_plan_items
-            WHERE planned_status = ?
+        sql = f"""
+            SELECT b.*
+            FROM batch_plan_items AS b
+            INNER JOIN sessions AS s ON s.session_id = b.session_id
+            INNER JOIN conditions AS c ON c.condition_id = b.condition_id
+            WHERE b.planned_status = ?
+              AND {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
         """
         params: list[Any] = [PlannedStatus.WAITING.value]
         if session_id:
-            sql += " AND session_id = ?"
+            sql += " AND b.session_id = ?"
             params.append(session_id)
-        sql += " ORDER BY planned_order ASC LIMIT 1"
+        sql += " ORDER BY b.planned_order ASC LIMIT 1"
         return self.database.fetch_one(sql, tuple(params))
 
     def replace_batch_plan(self, session_id: str, items: list[dict[str, Any]]) -> None:
@@ -228,8 +281,129 @@ class ElectrochemRepository:
         LOGGER.error("%s | %s", message, context)
         self.insert_record("error_logs", payload)
 
+    def get_mip_dependency_summary(self, mip_id: str) -> dict[str, int]:
+        row = self.database.fetch_one(
+            "SELECT COUNT(*) AS usage_count FROM mip_usage_records WHERE mip_id = ?",
+            (mip_id,),
+        )
+        return {"usage_count": int((row or {}).get("usage_count", 0))}
+
+    def get_mip_usage_dependency_summary(self, mip_usage_id: str) -> dict[str, int]:
+        row = self.database.fetch_one(
+            "SELECT COUNT(*) AS session_count FROM sessions WHERE mip_usage_id = ?",
+            (mip_usage_id,),
+        )
+        return {"session_count": int((row or {}).get("session_count", 0))}
+
+    def get_session_dependency_summary(self, session_id: str) -> dict[str, int]:
+        counts = self.database.fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM conditions WHERE session_id = ?) AS condition_count,
+                (SELECT COUNT(*) FROM batch_plan_items WHERE session_id = ?) AS batch_count,
+                (SELECT COUNT(*) FROM measurements WHERE session_id = ?) AS measurement_count
+            """,
+            (session_id, session_id, session_id),
+        ) or {}
+        return {
+            "condition_count": int(counts.get("condition_count", 0)),
+            "batch_count": int(counts.get("batch_count", 0)),
+            "measurement_count": int(counts.get("measurement_count", 0)),
+        }
+
+    def get_condition_dependency_summary(self, condition_id: str) -> dict[str, int]:
+        counts = self.database.fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM batch_plan_items WHERE condition_id = ?) AS batch_count,
+                (SELECT COUNT(*) FROM measurements WHERE condition_id = ?) AS measurement_count,
+                (SELECT COUNT(*) FROM aggregated_results WHERE condition_id = ?) AS aggregate_count,
+                (SELECT COUNT(*) FROM mean_voltammogram_records WHERE condition_id = ?) AS mean_count
+            """,
+            (condition_id, condition_id, condition_id, condition_id),
+        ) or {}
+        return {
+            "batch_count": int(counts.get("batch_count", 0)),
+            "measurement_count": int(counts.get("measurement_count", 0)),
+            "aggregate_count": int(counts.get("aggregate_count", 0)),
+            "mean_count": int(counts.get("mean_count", 0)),
+        }
+
+    def logical_delete_mip(self, mip_id: str) -> None:
+        self.mark_deleted("mip_records", mip_id)
+        self.bulk_mark_deleted("mip_usage_records", "mip_id = ?", (mip_id,))
+        self.bulk_mark_deleted(
+            "sessions",
+            "mip_usage_id IN (SELECT mip_usage_id FROM mip_usage_records WHERE mip_id = ?)",
+            (mip_id,),
+        )
+        self.bulk_mark_deleted(
+            "conditions",
+            "session_id IN (SELECT session_id FROM sessions WHERE mip_usage_id IN (SELECT mip_usage_id FROM mip_usage_records WHERE mip_id = ?))",
+            (mip_id,),
+        )
+
+    def logical_delete_mip_usage(self, mip_usage_id: str) -> None:
+        self.mark_deleted("mip_usage_records", mip_usage_id)
+        self.bulk_mark_deleted("sessions", "mip_usage_id = ?", (mip_usage_id,))
+        self.bulk_mark_deleted(
+            "conditions",
+            "session_id IN (SELECT session_id FROM sessions WHERE mip_usage_id = ?)",
+            (mip_usage_id,),
+        )
+
+    def logical_delete_session(self, session_id: str) -> None:
+        self.mark_deleted("sessions", session_id)
+        self.bulk_mark_deleted("conditions", "session_id = ?", (session_id,))
+
+    def purge_session(self, session_id: str) -> None:
+        self.database.delete("mean_voltammogram_records", "session_id = ?", (session_id,))
+        self.database.delete("aggregated_results", "session_id = ?", (session_id,))
+        self.database.delete("batch_plan_items", "session_id = ?", (session_id,))
+        self.database.delete("conditions", "session_id = ?", (session_id,))
+        self.database.delete("error_logs", "session_id = ?", (session_id,))
+        self.delete_record_physical("sessions", session_id)
+
+    def purge_condition(self, condition_id: str) -> None:
+        self.database.delete("mean_voltammogram_records", "condition_id = ?", (condition_id,))
+        self.database.delete("aggregated_results", "condition_id = ?", (condition_id,))
+        self.database.delete("batch_plan_items", "condition_id = ?", (condition_id,))
+        self.delete_record_physical("conditions", condition_id)
+
+    def list_active_batch_items(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        sql = f"""
+            SELECT b.*
+            FROM batch_plan_items AS b
+            INNER JOIN sessions AS s ON s.session_id = b.session_id
+            INNER JOIN conditions AS c ON c.condition_id = b.condition_id
+            WHERE {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
+        """
+        params: list[Any] = []
+        if session_id:
+            sql += " AND b.session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY b.planned_order ASC, b.created_at DESC"
+        return self.database.fetch_all(sql, tuple(params))
+
+    def list_active_measurements(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        sql = f"""
+            SELECT m.*
+            FROM measurements AS m
+            INNER JOIN sessions AS s ON s.session_id = m.session_id
+            INNER JOIN conditions AS c ON c.condition_id = m.condition_id
+            WHERE {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
+        """
+        params: list[Any] = []
+        if session_id:
+            sql += " AND m.session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY m.measured_at DESC, m.created_at DESC"
+        return self.database.fetch_all(sql, tuple(params))
+
     def refresh_condition_stats(self, session_id: str | None = None, condition_id: str | None = None) -> None:
-        filters: list[str] = []
+        filters: list[str] = [self._active_clause("conditions")]
         params: list[Any] = []
         if session_id:
             filters.append("session_id = ?")
@@ -238,11 +412,20 @@ class ElectrochemRepository:
             filters.append("condition_id = ?")
             params.append(condition_id)
 
-        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        where_clause = f"WHERE {' AND '.join(filters)}"
         conditions = self.database.fetch_all(f"SELECT * FROM conditions {where_clause}", tuple(params))
         for condition in conditions:
             measurement_rows = self.database.fetch_all(
-                "SELECT * FROM measurements WHERE condition_id = ? ORDER BY rep_no ASC",
+                """
+                SELECT m.*
+                FROM measurements AS m
+                INNER JOIN sessions AS s ON s.session_id = m.session_id
+                INNER JOIN conditions AS c ON c.condition_id = m.condition_id
+                WHERE m.condition_id = ?
+                  AND COALESCE(s.is_deleted, 0) = 0
+                  AND COALESCE(c.is_deleted, 0) = 0
+                ORDER BY m.rep_no ASC
+                """,
                 (condition["condition_id"],),
             )
             analysis_frame = self.database.query_frame(
@@ -288,27 +471,59 @@ class ElectrochemRepository:
 
     def list_recent_sessions(self, limit: int = 5) -> list[dict[str, Any]]:
         return self.database.fetch_all(
-            "SELECT * FROM sessions ORDER BY session_date DESC, created_at DESC LIMIT ?",
+            f"""
+            SELECT *
+            FROM sessions
+            WHERE {self._active_clause("sessions")}
+            ORDER BY session_date DESC, created_at DESC
+            LIMIT ?
+            """,
             (limit,),
         )
 
     def list_recent_mips(self, limit: int = 5) -> list[dict[str, Any]]:
         return self.database.fetch_all(
-            "SELECT * FROM mip_records ORDER BY preparation_date DESC, created_at DESC LIMIT ?",
+            f"""
+            SELECT *
+            FROM mip_records
+            WHERE {self._active_clause("mip_records")}
+            ORDER BY preparation_date DESC, created_at DESC
+            LIMIT ?
+            """,
             (limit,),
         )
 
     def get_home_snapshot(self) -> dict[str, Any]:
         unfinished = self.database.fetch_one(
-            "SELECT COUNT(*) AS value FROM conditions WHERE COALESCE(condition_status, '') <> ?",
+            f"""
+            SELECT COUNT(*) AS value
+            FROM conditions
+            WHERE {self._active_clause("conditions")}
+              AND COALESCE(condition_status, '') <> ?
+            """,
             (ConditionState.COMPLETED.value,),
         )
         flagged = self.database.fetch_one(
-            "SELECT COUNT(*) AS value FROM measurements WHERE final_quality_flag <> ?",
+            f"""
+            SELECT COUNT(*) AS value
+            FROM measurements AS m
+            INNER JOIN sessions AS s ON s.session_id = m.session_id
+            INNER JOIN conditions AS c ON c.condition_id = m.condition_id
+            WHERE {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
+              AND m.final_quality_flag <> ?
+            """,
             (QualityFlag.VALID.value,),
         )
         errors = self.database.fetch_all(
-            "SELECT * FROM error_logs ORDER BY created_at DESC LIMIT 5"
+            """
+            SELECT e.*
+            FROM error_logs AS e
+            LEFT JOIN sessions AS s ON s.session_id = e.session_id
+            WHERE s.session_id IS NULL OR COALESCE(s.is_deleted, 0) = 0
+            ORDER BY e.created_at DESC
+            LIMIT 5
+            """
         )
         return {
             "recent_sessions": self.list_recent_sessions(),
@@ -320,11 +535,11 @@ class ElectrochemRepository:
 
     def get_session_bundle(self, session_id: str) -> dict[str, Any]:
         session = self.get_record("sessions", session_id)
-        if not session:
+        if not session or int(session.get("is_deleted", 0)) == 1:
             raise ValueError(f"セッションが見つかりません: {session_id}")
         conditions = self.list_records("conditions", "concentration_value ASC", "session_id = ?", (session_id,))
-        batch_items = self.list_records("batch_plan_items", "planned_order ASC", "session_id = ?", (session_id,))
-        measurements = self.list_records("measurements", "measured_at ASC, created_at ASC", "session_id = ?", (session_id,))
+        batch_items = self.list_active_batch_items(session_id)
+        measurements = self.list_active_measurements(session_id)
         analysis_results = self.list_records("analysis_results", "created_at ASC", "session_id = ?", (session_id,))
         mean_records = self.list_records("mean_voltammogram_records", "created_at DESC", "session_id = ?", (session_id,))
         return {
@@ -342,8 +557,13 @@ class ElectrochemRepository:
         sql = f"""
             SELECT m.*, a.representative_current_a, a.representative_potential_v
             FROM measurements AS m
+            INNER JOIN sessions AS s ON s.session_id = m.session_id
+            INNER JOIN conditions AS c ON c.condition_id = m.condition_id
             LEFT JOIN analysis_results AS a ON a.measurement_id = m.measurement_id
-            WHERE m.condition_id = ? AND m.final_quality_flag IN ({placeholders})
+            WHERE m.condition_id = ?
+              AND m.final_quality_flag IN ({placeholders})
+              AND {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
             ORDER BY m.rep_no ASC
         """
         params = (condition_id, *include_flags)
@@ -357,28 +577,51 @@ class ElectrochemRepository:
 
     def get_export_frames(self, session_id: str) -> dict[str, pd.DataFrame]:
         session = self.get_record("sessions", session_id)
-        if not session:
+        if not session or int(session.get("is_deleted", 0)) == 1:
             raise ValueError(f"セッションが見つかりません: {session_id}")
 
         mip_usage = self.get_record("mip_usage_records", session["mip_usage_id"])
         mip_record = self.get_record("mip_records", mip_usage["mip_id"]) if mip_usage else None
         measurements = self.database.query_frame(
-            "SELECT * FROM measurements WHERE session_id = ? ORDER BY rep_no ASC",
+            f"""
+            SELECT m.*
+            FROM measurements AS m
+            INNER JOIN sessions AS s ON s.session_id = m.session_id
+            INNER JOIN conditions AS c ON c.condition_id = m.condition_id
+            WHERE m.session_id = ?
+              AND {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
+            ORDER BY m.rep_no ASC
+            """,
             (session_id,),
         )
         measurement_ids = measurements["measurement_id"].tolist() if not measurements.empty else []
         conditions = self.database.query_frame(
-            "SELECT * FROM conditions WHERE session_id = ? ORDER BY concentration_value ASC",
+            f"""
+            SELECT *
+            FROM conditions
+            WHERE session_id = ? AND {self._active_clause("conditions")}
+            ORDER BY concentration_value ASC
+            """,
             (session_id,),
         )
 
         frames: dict[str, pd.DataFrame] = {
-            "MIP一覧": pd.DataFrame([mip_record]) if mip_record else pd.DataFrame(),
-            "MIP使用一覧": pd.DataFrame([mip_usage]) if mip_usage else pd.DataFrame(),
+            "MIP一覧": pd.DataFrame([mip_record]) if mip_record and int(mip_record.get("is_deleted", 0)) == 0 else pd.DataFrame(),
+            "MIP使用一覧": pd.DataFrame([mip_usage]) if mip_usage and int(mip_usage.get("is_deleted", 0)) == 0 else pd.DataFrame(),
             "セッション一覧": pd.DataFrame([session]),
             "条件一覧": conditions,
             "バッチ実行計画": self.database.query_frame(
-                "SELECT * FROM batch_plan_items WHERE session_id = ? ORDER BY planned_order ASC",
+                f"""
+                SELECT b.*
+                FROM batch_plan_items AS b
+                INNER JOIN sessions AS s ON s.session_id = b.session_id
+                INNER JOIN conditions AS c ON c.condition_id = b.condition_id
+                WHERE b.session_id = ?
+                  AND {self._active_clause("sessions", "s")}
+                  AND {self._active_clause("conditions", "c")}
+                ORDER BY b.planned_order ASC
+                """,
                 (session_id,),
             ),
             "測定一覧": measurements,
@@ -416,7 +659,7 @@ class ElectrochemRepository:
         return frames
 
     def search_cross_measurements(self, filters: dict[str, Any]) -> pd.DataFrame:
-        sql = """
+        sql = f"""
             SELECT
                 m.measurement_id,
                 m.measured_at,
@@ -440,7 +683,8 @@ class ElectrochemRepository:
             LEFT JOIN mip_usage_records AS mu ON mu.mip_usage_id = s.mip_usage_id
             LEFT JOIN mip_records AS mr ON mr.mip_id = mu.mip_id
             LEFT JOIN analysis_results AS a ON a.measurement_id = m.measurement_id
-            WHERE 1 = 1
+            WHERE {self._active_clause("sessions", "s")}
+              AND {self._active_clause("conditions", "c")}
         """
         params: list[Any] = []
         if analyte := str(filters.get("analyte", "")).strip():
