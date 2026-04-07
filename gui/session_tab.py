@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target, select_tree_record
 from utils.date_utils import today_string
 
 
@@ -46,13 +47,14 @@ class SessionTab(ttk.Frame):
         ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
-        columns = ("session_id", "session_date", "analyte", "session_name", "mip_usage_id", "method_default")
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=12)
+        self.tree_columns = ("session_id", "session_date", "analyte", "session_name", "mip_usage_id", "method_default")
+        self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=12)
         headings = ["セッション ID", "測定日", "測定対象物質", "セッション名", "使用 ID", "測定法"]
-        for column, heading in zip(columns, headings):
+        for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=160)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _apply_default_operator(self, force: bool = False) -> None:
         if self.editing_session_id:
@@ -85,6 +87,10 @@ class SessionTab(ttk.Frame):
         self.session_name_var.set(str(row.get("session_name", "")))
         self.method_var.set(str(row.get("method_default", "")))
         self.operator_var.set(str(row.get("operator", "")))
+
+    def focus_record(self, session_id: str) -> None:
+        if select_tree_record(self.tree, session_id):
+            self._load_selected()
 
     def _reset_form(self) -> None:
         self.editing_session_id = None
@@ -142,6 +148,14 @@ class SessionTab(ttk.Frame):
             messagebox.showinfo("セッション削除", message)
         except Exception as error:
             messagebox.showerror("セッション削除", str(error))
+
+    def _handle_tree_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "session")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         usage_ids = [row["mip_usage_id"] for row in self.services.list_mip_usages()]

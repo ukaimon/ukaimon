@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target
 
 
 class SessionDetailTab(ttk.Frame):
@@ -28,33 +29,37 @@ class SessionDetailTab(ttk.Frame):
         tables = ttk.Frame(self)
         tables.pack(fill="both", expand=True, padx=12, pady=12)
 
+        self.condition_columns = ("condition_id", "concentration_value", "method", "actual_replicates", "n_valid", "n_invalid", "condition_status")
         self.condition_tree = ttk.Treeview(
             tables,
-            columns=("condition_id", "concentration_value", "method", "actual_replicates", "n_valid", "n_invalid", "condition_status"),
+            columns=self.condition_columns,
             show="headings",
             height=8,
         )
         for column, heading in zip(
-            ("condition_id", "concentration_value", "method", "actual_replicates", "n_valid", "n_invalid", "condition_status"),
+            self.condition_columns,
             ("条件 ID", "濃度", "測定法", "実測", "valid", "invalid", "状態"),
         ):
             self.condition_tree.heading(column, text=heading)
             self.condition_tree.column(column, width=120)
         self.condition_tree.pack(fill="x", pady=(0, 12))
+        self.condition_tree.bind("<Double-1>", self._handle_condition_double_click)
 
+        self.measurement_columns = ("measurement_id", "condition_id", "rep_no", "measured_at", "final_quality_flag", "raw_file_path")
         self.measurement_tree = ttk.Treeview(
             tables,
-            columns=("measurement_id", "condition_id", "rep_no", "measured_at", "final_quality_flag", "raw_file_path"),
+            columns=self.measurement_columns,
             show="headings",
             height=10,
         )
         for column, heading in zip(
-            ("measurement_id", "condition_id", "rep_no", "measured_at", "final_quality_flag", "raw_file_path"),
+            self.measurement_columns,
             ("測定 ID", "条件 ID", "rep", "測定日時", "品質", "raw_file_path"),
         ):
             self.measurement_tree.heading(column, text=heading)
             self.measurement_tree.column(column, width=140 if column != "raw_file_path" else 280)
         self.measurement_tree.pack(fill="both", expand=True)
+        self.measurement_tree.bind("<Double-1>", self._handle_measurement_double_click)
 
     def _aggregate(self) -> None:
         try:
@@ -76,6 +81,22 @@ class SessionDetailTab(ttk.Frame):
             messagebox.showinfo("セッション出力", "\n".join(f"{key}: {value}" for key, value in outputs.items()))
         except Exception as error:
             messagebox.showerror("セッション出力", str(error))
+
+    def _handle_condition_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.condition_tree, self.condition_columns, event, "session_detail_condition")
+        if target:
+            navigator(*target)
+
+    def _handle_measurement_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.measurement_tree, self.measurement_columns, event, "session_detail_measurement")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]

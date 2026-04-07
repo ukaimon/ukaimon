@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target
 
 
 class CrossReportTab(ttk.Frame):
@@ -37,7 +38,7 @@ class CrossReportTab(ttk.Frame):
         ttk.Button(controls, text="検索", command=self.refresh_tab).grid(row=0, column=10, padx=6)
         ttk.Button(controls, text="CSV 出力", command=self._export_csv).grid(row=0, column=11, padx=6)
 
-        columns = (
+        self.tree_columns = (
             "measurement_id",
             "session_id",
             "analyte",
@@ -47,12 +48,13 @@ class CrossReportTab(ttk.Frame):
             "final_quality_flag",
             "representative_current_a",
         )
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=18)
+        self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=18)
         headings = ["測定 ID", "セッション", "測定対象物質", "条件", "濃度", "測定法", "品質", "代表電流"]
-        for column, heading in zip(columns, headings):
+        for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _filters(self) -> dict[str, str]:
         return {
@@ -69,6 +71,14 @@ class CrossReportTab(ttk.Frame):
             messagebox.showinfo("横断 CSV", path)
         except Exception as error:
             messagebox.showerror("横断 CSV", str(error))
+
+    def _handle_tree_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "cross_report")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         frame = self.services.repository.search_cross_measurements(self._filters())

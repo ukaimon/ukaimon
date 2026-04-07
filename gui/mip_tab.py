@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target, select_tree_record
 from utils.date_utils import today_string
 
 
@@ -38,13 +39,14 @@ class MipTab(ttk.Frame):
         ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
-        columns = ("mip_id", "preparation_date", "template_name", "operator", "note")
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=12)
+        self.tree_columns = ("mip_id", "preparation_date", "template_name", "operator", "note")
+        self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=12)
         headings = ["MIP ID", "調製日", "テンプレート名", "担当者", "メモ"]
-        for column, heading in zip(columns, headings):
+        for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140 if column != "note" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _apply_default_operator(self, force: bool = False) -> None:
         if self.editing_mip_id:
@@ -72,6 +74,10 @@ class MipTab(ttk.Frame):
         self.preparation_date_var.set(str(row.get("preparation_date", "")))
         self.operator_var.set(str(row.get("operator", "")))
         self.note_var.set(str(row.get("note", "")))
+
+    def focus_record(self, mip_id: str) -> None:
+        if select_tree_record(self.tree, mip_id):
+            self._load_selected()
 
     def _reset_form(self) -> None:
         self.editing_mip_id = None
@@ -123,6 +129,14 @@ class MipTab(ttk.Frame):
             messagebox.showinfo("MIP 削除", message)
         except Exception as error:
             messagebox.showerror("MIP 削除", str(error))
+
+    def _handle_tree_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "mip")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         for item in self.tree.get_children():

@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target, select_tree_record
 
 
 class ConditionTab(ttk.Frame):
@@ -41,7 +42,7 @@ class ConditionTab(ttk.Frame):
         ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
-        columns = (
+        self.tree_columns = (
             "condition_id",
             "session_id",
             "concentration_value",
@@ -53,12 +54,13 @@ class ConditionTab(ttk.Frame):
             "n_invalid",
             "condition_status",
         )
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=14)
+        self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=14)
         headings = ["条件 ID", "セッション", "濃度", "単位", "測定法", "予定", "実測", "valid", "invalid", "状態"]
-        for column, heading in zip(columns, headings):
+        for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=110)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _selected_condition_id(self) -> str | None:
         selection = self.tree.selection()
@@ -81,6 +83,10 @@ class ConditionTab(ttk.Frame):
         self.unit_var.set(str(row.get("concentration_unit", "")))
         self.method_var.set(str(row.get("method", "")))
         self.planned_replicates_var.set(str(row.get("planned_replicates", "")))
+
+    def focus_record(self, condition_id: str) -> None:
+        if select_tree_record(self.tree, condition_id):
+            self._load_selected()
 
     def _reset_form(self) -> None:
         self.editing_condition_id = None
@@ -133,6 +139,14 @@ class ConditionTab(ttk.Frame):
             messagebox.showinfo("条件削除", message)
         except Exception as error:
             messagebox.showerror("条件削除", str(error))
+
+    def _handle_tree_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "condition")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]

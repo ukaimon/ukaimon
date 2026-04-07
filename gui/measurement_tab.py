@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.services import AppServices
+from gui.navigation import extract_tree_navigation_target, select_tree_record
 
 
 class MeasurementTab(ttk.Frame):
@@ -48,13 +49,14 @@ class MeasurementTab(ttk.Frame):
         ttk.Button(actions, text="編集解除", command=self._reset_form).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
-        columns = ("measurement_id", "session_id", "condition_id", "rep_no", "measured_at", "status", "final_quality_flag", "raw_file_path")
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=14)
+        self.tree_columns = ("measurement_id", "session_id", "condition_id", "rep_no", "measured_at", "status", "final_quality_flag", "raw_file_path")
+        self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=14)
         headings = ["測定 ID", "セッション", "条件", "rep", "測定日時", "状態", "品質", "raw_file_path"]
-        for column, heading in zip(columns, headings):
+        for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=140 if column != "raw_file_path" else 260)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tree.bind("<Double-1>", self._handle_tree_double_click)
 
     def _selected_measurement_id(self) -> str | None:
         selection = self.tree.selection()
@@ -88,6 +90,10 @@ class MeasurementTab(ttk.Frame):
         self.status_var.set(str(row.get("status", "")))
         self.noise_var.set("" if row.get("noise_level") is None else str(row.get("noise_level")))
         self.memo_var.set(str(row.get("free_memo", "")))
+
+    def focus_record(self, measurement_id: str) -> None:
+        if select_tree_record(self.tree, measurement_id):
+            self._load_selected()
 
     def _reset_form(self) -> None:
         self.editing_measurement_id = None
@@ -133,6 +139,14 @@ class MeasurementTab(ttk.Frame):
             messagebox.showinfo("測定削除", message)
         except Exception as error:
             messagebox.showerror("測定削除", str(error))
+
+    def _handle_tree_double_click(self, event: tk.Event) -> None:
+        navigator = getattr(self, "navigate_to_record", None)
+        if not callable(navigator):
+            return
+        target = extract_tree_navigation_target(self.tree, self.tree_columns, event, "measurement")
+        if target:
+            navigator(*target)
 
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]
