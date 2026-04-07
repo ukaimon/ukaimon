@@ -11,6 +11,8 @@ class ConditionTab(ttk.Frame):
         super().__init__(master)
         self.services = services
         self.refresh_app = refresh_app
+        self.editing_condition_id: str | None = None
+        self.save_button_label = tk.StringVar(value="新規追加")
         self.session_id_var = tk.StringVar()
         self.concentration_var = tk.StringVar()
         self.unit_var = tk.StringVar(value="ppm")
@@ -30,11 +32,14 @@ class ConditionTab(ttk.Frame):
         ttk.Entry(form, textvariable=self.method_var, width=16).grid(row=1, column=1, sticky="w")
         ttk.Label(form, text="予定回数").grid(row=1, column=2, sticky="w", padx=6, pady=6)
         ttk.Entry(form, textvariable=self.planned_replicates_var, width=12).grid(row=1, column=3, sticky="w")
-        ttk.Button(form, text="新規追加", command=self._create_condition).grid(row=0, column=6, rowspan=2, padx=6)
+        ttk.Button(form, textvariable=self.save_button_label, command=self._save_condition).grid(row=0, column=6, rowspan=2, padx=6)
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", padx=12)
-        ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left")
+        ttk.Button(actions, text="選択を編集", command=self._load_selected).pack(side="left")
+        ttk.Button(actions, text="編集解除", command=self._reset_form).pack(side="left", padx=(6, 0))
+        ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left", padx=(6, 0))
+        ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
         columns = (
             "condition_id",
@@ -55,38 +60,84 @@ class ConditionTab(ttk.Frame):
             self.tree.column(column, width=110)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
 
-    def _create_condition(self) -> None:
+    def _selected_condition_id(self) -> str | None:
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        return str(self.tree.item(selection[0], "values")[0])
+
+    def _load_selected(self) -> None:
+        condition_id = self._selected_condition_id()
+        if not condition_id:
+            return
+        row = self.services.repository.get_record("conditions", condition_id)
+        if not row:
+            messagebox.showerror("条件編集", "選択した条件が見つかりません。")
+            return
+        self.editing_condition_id = condition_id
+        self.save_button_label.set("更新保存")
+        self.session_id_var.set(str(row.get("session_id", "")))
+        self.concentration_var.set(str(row.get("concentration_value", "")))
+        self.unit_var.set(str(row.get("concentration_unit", "")))
+        self.method_var.set(str(row.get("method", "")))
+        self.planned_replicates_var.set(str(row.get("planned_replicates", "")))
+
+    def _reset_form(self) -> None:
+        self.editing_condition_id = None
+        self.save_button_label.set("新規追加")
+        self.concentration_var.set("")
+        self.unit_var.set("ppm")
+        self.method_var.set("CV")
+        self.planned_replicates_var.set("3")
+
+    def _save_condition(self) -> None:
+        payload = {
+            "session_id": self.session_id_var.get(),
+            "concentration_value": float(self.concentration_var.get()),
+            "concentration_unit": self.unit_var.get(),
+            "method": self.method_var.get(),
+            "planned_replicates": int(self.planned_replicates_var.get()) if self.planned_replicates_var.get() else None,
+            "common_note": "",
+            "tags": "",
+        }
         try:
-            self.services.create_condition(
-                {
-                    "session_id": self.session_id_var.get(),
-                    "concentration_value": float(self.concentration_var.get()),
-                    "concentration_unit": self.unit_var.get(),
-                    "method": self.method_var.get(),
-                    "planned_replicates": int(self.planned_replicates_var.get()) if self.planned_replicates_var.get() else None,
-                    "common_note": "",
-                    "tags": "",
-                }
-            )
+            if self.editing_condition_id:
+                self.services.update_condition(self.editing_condition_id, payload)
+            else:
+                self.services.create_condition(payload)
+            self._reset_form()
             self.refresh_app()
         except Exception as error:
             messagebox.showerror("条件登録", str(error))
 
     def _duplicate_selected(self) -> None:
-        selection = self.tree.selection()
-        if not selection:
+        condition_id = self._selected_condition_id()
+        if not condition_id:
             return
-        condition_id = self.tree.item(selection[0], "values")[0]
         try:
             self.services.duplicate_condition(condition_id)
             self.refresh_app()
         except Exception as error:
             messagebox.showerror("条件複製", str(error))
 
+    def _delete_selected(self) -> None:
+        condition_id = self._selected_condition_id()
+        if not condition_id:
+            return
+        if not messagebox.askyesno("条件削除", "選択した条件を削除しますか？"):
+            return
+        try:
+            message = self.services.delete_condition(condition_id)
+            self._reset_form()
+            self.refresh_app()
+            messagebox.showinfo("条件削除", message)
+        except Exception as error:
+            messagebox.showerror("条件削除", str(error))
+
     def refresh_tab(self) -> None:
         session_ids = [row["session_id"] for row in self.services.list_sessions()]
         self.session_combo["values"] = session_ids
-        if session_ids and not self.session_id_var.get():
+        if session_ids and self.session_id_var.get() not in session_ids:
             self.session_id_var.set(session_ids[0])
 
         for item in self.tree.get_children():
