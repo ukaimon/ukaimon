@@ -92,6 +92,71 @@ class AppServices:
             return f"{value:.9g}"
         return str(value).strip()
 
+    @staticmethod
+    def _format_summary_number(value: Any, unit: str = "") -> str | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, float):
+            return f"{value:g}{unit}"
+        return f"{str(value).strip()}{unit}"
+
+    def _build_ids_header_summary(self, file_path: str | Path) -> str:
+        path = Path(file_path)
+        if not path.exists():
+            return f"{path.name}\nファイルが見つかりません。"
+        try:
+            parsed = parse_ids_file(path)
+        except Exception as error:
+            return f"{path.name}\nヘッダ要約を読めません: {error}"
+
+        condition_payload = build_measurement_conditions(parsed.metadata, parsed.raw_header_text)
+        lines = [path.name]
+
+        method = str(condition_payload.get("method") or parsed.metadata.get("Method") or "Unknown").strip()
+        started_at = str(parsed.metadata.get("starttime_iso") or parsed.metadata.get("starttime") or "").strip()
+        lines.append(f"{method} / {started_at or '-'}")
+
+        range_parts: list[str] = []
+        start_v = self._format_summary_number(condition_payload.get("potential_start_v"), "V")
+        end_v = self._format_summary_number(condition_payload.get("potential_end_v"), "V")
+        vertex_1_v = self._format_summary_number(condition_payload.get("potential_vertex_1_v"), "V")
+        vertex_2_v = self._format_summary_number(condition_payload.get("potential_vertex_2_v"), "V")
+        if start_v and end_v:
+            range_parts.append(f"{start_v}->{end_v}")
+        elif start_v or vertex_1_v or vertex_2_v:
+            range_preview = " / ".join(part for part in (start_v, vertex_1_v, vertex_2_v) if part)
+            range_parts.append(range_preview)
+
+        scan_rate = self._format_summary_number(condition_payload.get("scan_rate_v_s"), "V/s")
+        if scan_rate:
+            range_parts.append(f"scan {scan_rate}")
+        cycles = self._format_summary_number(condition_payload.get("cycles"))
+        if cycles:
+            range_parts.append(f"cycle {cycles}")
+        lines.append(" / ".join(range_parts) if range_parts else "条件: ヘッダ抽出なし")
+
+        extra_parts: list[str] = []
+        pulse_amplitude = self._format_summary_number(condition_payload.get("pulse_amplitude_v"), "V")
+        if pulse_amplitude:
+            extra_parts.append(f"amp {pulse_amplitude}")
+        pulse_time = self._format_summary_number(condition_payload.get("pulse_time_s"), "s")
+        if pulse_time:
+            extra_parts.append(f"pulse {pulse_time}")
+        step_v = self._format_summary_number(condition_payload.get("step_v"), "V")
+        if step_v and not pulse_amplitude:
+            extra_parts.append(f"step {step_v}")
+        current_range = str(condition_payload.get("current_range") or "").strip()
+        if current_range:
+            extra_parts.append(f"range {current_range}")
+        if parsed.metadata.get("parser_recovered"):
+            extra_parts.append("回復読込")
+        available_blocks = parsed.metadata.get("available_blocks")
+        if isinstance(available_blocks, list) and len(available_blocks) > 1:
+            extra_parts.append(f"block {len(available_blocks)}")
+        if extra_parts:
+            lines.append(" / ".join(extra_parts))
+        return "\n".join(lines[:4])
+
     def _get_import_target(self, session_id: str | None = None, batch_item_id: str | None = None) -> dict[str, Any]:
         if batch_item_id:
             batch_item = self.repository.get_active_batch_item(batch_item_id)
@@ -198,6 +263,17 @@ class AppServices:
             LIMIT 200
             """
         )
+
+    def get_measurement_header_summary(self, measurement_id: str) -> str:
+        if not measurement_id:
+            return "測定 ID を選ぶと .ids 要約が表示されます。"
+        measurement = self.repository.get_record("measurements", measurement_id)
+        if not measurement or int(measurement.get("is_deleted", 0)) == 1:
+            return "選択した測定が見つかりません。"
+        raw_file_path = str(measurement.get("raw_file_path") or "").strip()
+        if not raw_file_path:
+            return f"{measurement_id}\n.ids ファイル未登録"
+        return self._build_ids_header_summary(raw_file_path)
 
     def home_snapshot(self) -> dict[str, Any]:
         return self.repository.get_home_snapshot()

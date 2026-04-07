@@ -16,6 +16,7 @@ class WatcherTab(ttk.Frame):
         self.watch_folder_var = tk.StringVar(value=str((services.root_path / services.config.watch_folder).resolve()))
         self.relink_measurement_var = tk.StringVar()
         self.relink_batch_item_var = tk.StringVar()
+        self.header_summary_var = tk.StringVar(value="測定 ID を選ぶと .ids 要約が表示されます。")
 
         controls = ttk.LabelFrame(self, text="Ivium .ids ファイル監視")
         controls.pack(fill="x", padx=12, pady=12)
@@ -28,14 +29,24 @@ class WatcherTab(ttk.Frame):
 
         relink = ttk.LabelFrame(self, text="手動修正")
         relink.pack(fill="x", padx=12, pady=(0, 12))
+        relink.columnconfigure(6, weight=1)
         ttk.Label(relink, text="測定 ID").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         self.relink_measurement_combo = ttk.Combobox(relink, textvariable=self.relink_measurement_var, width=28, state="readonly")
         self.relink_measurement_combo.grid(row=0, column=1, sticky="w")
+        self.relink_measurement_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_header_summary())
         ttk.Label(relink, text="移動先バッチ ID").grid(row=0, column=2, sticky="w", padx=6, pady=6)
         self.relink_batch_combo = ttk.Combobox(relink, textvariable=self.relink_batch_item_var, width=28, state="readonly")
         self.relink_batch_combo.grid(row=0, column=3, sticky="w")
         ttk.Button(relink, text="再リンク", command=self._relink_measurement).grid(row=0, column=4, padx=6)
         ttk.Button(relink, text="指定項目へ取込", command=self._import_single_file_to_target).grid(row=0, column=5, padx=6)
+        summary_frame = ttk.LabelFrame(relink, text=".ids 要約")
+        summary_frame.grid(row=0, column=6, rowspan=2, sticky="nsew", padx=(12, 6), pady=6)
+        ttk.Label(
+            summary_frame,
+            textvariable=self.header_summary_var,
+            justify="left",
+            wraplength=420,
+        ).pack(fill="x", padx=6, pady=6)
 
         self.status_list = tk.Listbox(self, height=16)
         self.status_list.pack(fill="both", expand=True, padx=12, pady=12)
@@ -117,6 +128,10 @@ class WatcherTab(ttk.Frame):
         except Exception as error:
             messagebox.showerror("再リンク", str(error))
 
+    def _update_header_summary(self) -> None:
+        measurement_id = self.relink_measurement_var.get().strip()
+        self.header_summary_var.set(self.services.get_measurement_header_summary(measurement_id))
+
     def refresh_tab(self) -> None:
         if self.status_list.size() == 0:
             self.status_list.insert(tk.END, "待機中")
@@ -126,5 +141,10 @@ class WatcherTab(ttk.Frame):
         self.relink_batch_combo["values"] = batch_item_ids
         if measurement_ids and self.relink_measurement_var.get() not in measurement_ids:
             self.relink_measurement_var.set(measurement_ids[0])
+        if not measurement_ids:
+            self.relink_measurement_var.set("")
         if batch_item_ids and self.relink_batch_item_var.get() not in batch_item_ids:
             self.relink_batch_item_var.set(batch_item_ids[0])
+        if not batch_item_ids:
+            self.relink_batch_item_var.set("")
+        self._update_header_summary()

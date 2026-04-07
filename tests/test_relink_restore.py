@@ -8,6 +8,7 @@ from core.config import AppConfig
 from core.database import DatabaseManager
 from core.repositories import ElectrochemRepository
 from core.services import AppServices
+from gui.restore_tab import filter_restore_rows
 
 
 class RelinkRestoreTests(unittest.TestCase):
@@ -231,6 +232,42 @@ class RelinkRestoreTests(unittest.TestCase):
         self.assertTrue(any(row["mip_usage_id"] == usage_id for row in self.services.list_mip_usages()))
         self.assertTrue(any(row["session_id"] == session_id for row in self.services.list_sessions()))
         self.assertTrue(any(row["condition_id"] == condition_id for row in self.services.list_conditions()))
+
+    def test_measurement_header_summary_uses_ids_metadata(self) -> None:
+        _, _, session_id, condition_id = self._create_base_records()
+        measurement_id = self.services.create_measurement(
+            {
+                "session_id": session_id,
+                "condition_id": condition_id,
+                "chip_id": "chip-1",
+                "wire_id": "wire-1",
+                "status": "manual",
+                "noise_level": 0.1,
+                "raw_file_path": str(self.root / "idsサンプル" / "1527_260402CV_P33107.ids"),
+                "free_memo": "",
+            }
+        )
+
+        summary = self.services.get_measurement_header_summary(measurement_id)
+
+        self.assertIn("1527_260402CV_P33107.ids", summary)
+        self.assertIn("CyclicVoltammetry", summary)
+        self.assertIn("scan 0.1V/s", summary)
+        self.assertIn("cycle 5", summary)
+
+    def test_filter_restore_rows_matches_single_search_box(self) -> None:
+        rows = [
+            {"record_id": "SES-20260407-0001-AA", "summary": "2026-04-07 / dopamine", "deleted_at": "2026-04-07T09:00:00"},
+            {"record_id": "COND-20260407-10ppm-0001-BB", "summary": "10 ppm / CV", "deleted_at": "2026-04-07T10:00:00"},
+        ]
+
+        filtered = filter_restore_rows(rows, "dopamine")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["record_id"], "SES-20260407-0001-AA")
+
+        filtered_by_id = filter_restore_rows(rows, "10ppm")
+        self.assertEqual(len(filtered_by_id), 1)
+        self.assertEqual(filtered_by_id[0]["record_id"], "COND-20260407-10ppm-0001-BB")
 
 
 if __name__ == "__main__":
