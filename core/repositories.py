@@ -143,6 +143,21 @@ class ElectrochemRepository:
         sql += f" ORDER BY {order_by}"
         return self.database.fetch_all(sql, params)
 
+    def get_latest_operator(self, table_name: str) -> str:
+        conditions: list[str] = ["COALESCE(TRIM(operator), '') <> ''"]
+        if self._supports_soft_delete(table_name):
+            conditions.append(self._active_clause(table_name))
+        row = self.database.fetch_one(
+            f"""
+            SELECT operator
+            FROM {table_name}
+            WHERE {" AND ".join(f"({condition})" for condition in conditions)}
+            ORDER BY updated_at DESC, created_at DESC, rowid DESC
+            LIMIT 1
+            """
+        )
+        return str((row or {}).get("operator", ""))
+
     def duplicate_record(self, table_name: str, record_id: str, prefix: str) -> str:
         record = self.get_record(table_name, record_id)
         if not record:

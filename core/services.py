@@ -88,6 +88,23 @@ class AppServices:
     def home_snapshot(self) -> dict[str, Any]:
         return self.repository.get_home_snapshot()
 
+    def get_default_mip_operator(self) -> str:
+        return self.repository.get_latest_operator("mip_records")
+
+    def get_default_mip_usage_operator(self, mip_id: str | None = None) -> str:
+        if mip_id:
+            mip_row = self.repository.get_record("mip_records", mip_id)
+            if mip_row and int(mip_row.get("is_deleted", 0)) == 0 and str(mip_row.get("operator", "")).strip():
+                return str(mip_row["operator"])
+        return self.repository.get_latest_operator("mip_usage_records") or self.get_default_mip_operator()
+
+    def get_default_session_operator(self, mip_usage_id: str | None = None) -> str:
+        if mip_usage_id:
+            usage_row = self.repository.get_record("mip_usage_records", mip_usage_id)
+            if usage_row and int(usage_row.get("is_deleted", 0)) == 0 and str(usage_row.get("operator", "")).strip():
+                return str(usage_row["operator"])
+        return self.repository.get_latest_operator("sessions") or self.repository.get_latest_operator("mip_usage_records")
+
     def create_mip(self, payload: dict[str, Any]) -> str:
         require_fields(payload, ["template_name", "preparation_date", "operator"])
         mip_id = generate_id("MIP")
