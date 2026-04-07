@@ -73,3 +73,4 @@ python -m unittest discover -s tests -p "test_*.py"
 - `.ids` サンプルは `idsサンプル/` を既定の監視先に設定しています。
 - ローカル設定は `config/local_config.json` に上書き保存できます。
 - 本番 DB は `database/` 配下に作成されますが `.gitignore` により追跡されません。
+- 新規 ID は `MIP-20260407-0001-KD` のように、種別プレフィックスと日付が分かる形式で生成されます。
