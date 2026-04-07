@@ -14,6 +14,7 @@ from analysis.plotting import save_mean_curve_plot, save_measurement_plot
 from core.batch_planner import generate_batch_plan_items
 from core.config import AppConfig
 from core.linking import BatchLinker, IdsWatchCoordinator
+from core.mip_usage_fields import with_mip_usage_field_defaults
 from core.models import PlannedStatus
 from core.quality import derive_auto_quality, resolve_final_quality
 from core.repositories import ElectrochemRepository
@@ -317,16 +318,18 @@ class AppServices:
         return "関連データがあるため、MIP を論理削除しました。"
 
     def create_mip_usage(self, payload: dict[str, Any]) -> str:
-        require_fields(payload, ["mip_id"])
-        require_any(payload, ["cp_preparation_date", "coating_date"])
+        normalized_payload = {**payload, **with_mip_usage_field_defaults(payload)}
+        require_fields(normalized_payload, ["mip_id"])
+        require_any(normalized_payload, ["cp_preparation_date", "coating_date"])
         mip_usage_id = generate_id("MUSE")
-        self.repository.insert_record("mip_usage_records", {"mip_usage_id": mip_usage_id, **payload})
+        self.repository.insert_record("mip_usage_records", {"mip_usage_id": mip_usage_id, **normalized_payload})
         return mip_usage_id
 
     def update_mip_usage(self, mip_usage_id: str, payload: dict[str, Any]) -> None:
-        require_fields(payload, ["mip_id"])
-        require_any(payload, ["cp_preparation_date", "coating_date"])
-        self.repository.update_record("mip_usage_records", mip_usage_id, payload)
+        normalized_payload = {**payload, **with_mip_usage_field_defaults(payload)}
+        require_fields(normalized_payload, ["mip_id"])
+        require_any(normalized_payload, ["cp_preparation_date", "coating_date"])
+        self.repository.update_record("mip_usage_records", mip_usage_id, normalized_payload)
 
     def duplicate_mip_usage(self, mip_usage_id: str) -> str:
         return self.repository.duplicate_record("mip_usage_records", mip_usage_id, "MUSE")

@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from core.mip_fields import MIP_FIELD_DEFAULTS, MIP_FIELD_SQL_COLUMNS
+from core.mip_usage_fields import MIP_USAGE_FIELD_DEFAULTS, MIP_USAGE_FIELD_SQL_COLUMNS
 
 
 SCHEMA_STATEMENTS = [
@@ -50,11 +51,12 @@ SCHEMA_STATEMENTS = [
         mip_id TEXT NOT NULL,
         cp_preparation_date TEXT,
         coating_date TEXT,
-        kneading_count INTEGER,
+        kneading_count INTEGER DEFAULT 5,
         silicone_oil_amount REAL,
         graphite_amount REAL,
-        coating_speed_mm_min REAL,
-        coating_passes INTEGER,
+        coating_speed_mm_min REAL DEFAULT 2000,
+        coating_passes INTEGER DEFAULT 5,
+        coating_height REAL DEFAULT 6.8,
         operator TEXT,
         note TEXT,
         tags TEXT,
@@ -325,6 +327,7 @@ class DatabaseManager:
                 connection.execute(statement)
             self._apply_soft_delete_migrations(connection)
             self._apply_mip_record_migrations(connection)
+            self._apply_mip_usage_record_migrations(connection)
             connection.commit()
 
     def _apply_soft_delete_migrations(self, connection: sqlite3.Connection) -> None:
@@ -353,6 +356,26 @@ class DatabaseManager:
             connection.execute(
                 f"""
                 UPDATE mip_records
+                SET {column_name} = ?
+                WHERE {column_name} IS NULL OR TRIM(CAST({column_name} AS TEXT)) = ''
+                """,
+                (default_value,),
+            )
+
+    def _apply_mip_usage_record_migrations(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(mip_usage_records)").fetchall()
+        }
+        for column_name, column_definition in MIP_USAGE_FIELD_SQL_COLUMNS.items():
+            if column_name not in existing_columns:
+                connection.execute(
+                    f"ALTER TABLE mip_usage_records ADD COLUMN {column_name} {column_definition}"
+                )
+        for column_name, default_value in MIP_USAGE_FIELD_DEFAULTS.items():
+            connection.execute(
+                f"""
+                UPDATE mip_usage_records
                 SET {column_name} = ?
                 WHERE {column_name} IS NULL OR TRIM(CAST({column_name} AS TEXT)) = ''
                 """,
