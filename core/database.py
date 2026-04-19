@@ -10,6 +10,23 @@ from core.mip_fields import MIP_FIELD_DEFAULTS, MIP_FIELD_SQL_COLUMNS
 from core.mip_usage_fields import MIP_USAGE_FIELD_DEFAULTS, MIP_USAGE_FIELD_SQL_COLUMNS
 
 
+CONDITION_FIELD_SQL_COLUMNS = {
+    "ivium_method_name": "TEXT",
+    "potential_start_v": "REAL",
+    "potential_end_v": "REAL",
+    "potential_vertex_1_v": "REAL",
+    "potential_vertex_2_v": "REAL",
+    "scan_rate_v_s": "REAL",
+    "step_v": "REAL",
+    "pulse_amplitude_v": "REAL",
+    "pulse_time_s": "REAL",
+    "quiet_time_s": "REAL",
+    "cycles": "INTEGER",
+    "current_range": "TEXT",
+    "filter_setting": "TEXT",
+}
+
+
 SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS mip_records (
@@ -54,8 +71,9 @@ SCHEMA_STATEMENTS = [
         kneading_count INTEGER DEFAULT 5,
         silicone_oil_amount REAL,
         graphite_amount REAL,
+        chip_type TEXT DEFAULT '',
         coating_speed_mm_min REAL DEFAULT 2000,
-        coating_passes INTEGER DEFAULT 5,
+        coating_passes INTEGER DEFAULT 3,
         coating_height REAL DEFAULT 6.8,
         operator TEXT,
         note TEXT,
@@ -95,6 +113,19 @@ SCHEMA_STATEMENTS = [
         concentration_value REAL NOT NULL,
         concentration_unit TEXT NOT NULL,
         method TEXT NOT NULL,
+        ivium_method_name TEXT,
+        potential_start_v REAL,
+        potential_end_v REAL,
+        potential_vertex_1_v REAL,
+        potential_vertex_2_v REAL,
+        scan_rate_v_s REAL,
+        step_v REAL,
+        pulse_amplitude_v REAL,
+        pulse_time_s REAL,
+        quiet_time_s REAL,
+        cycles INTEGER,
+        current_range TEXT,
+        filter_setting TEXT,
         planned_replicates INTEGER,
         actual_replicates INTEGER DEFAULT 0,
         n_valid INTEGER DEFAULT 0,
@@ -328,6 +359,7 @@ class DatabaseManager:
             self._apply_soft_delete_migrations(connection)
             self._apply_mip_record_migrations(connection)
             self._apply_mip_usage_record_migrations(connection)
+            self._apply_condition_migrations(connection)
             connection.commit()
 
     def _apply_soft_delete_migrations(self, connection: sqlite3.Connection) -> None:
@@ -381,6 +413,17 @@ class DatabaseManager:
                 """,
                 (default_value,),
             )
+
+    def _apply_condition_migrations(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(conditions)").fetchall()
+        }
+        for column_name, column_definition in CONDITION_FIELD_SQL_COLUMNS.items():
+            if column_name not in existing_columns:
+                connection.execute(
+                    f"ALTER TABLE conditions ADD COLUMN {column_name} {column_definition}"
+                )
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self.connect() as connection:

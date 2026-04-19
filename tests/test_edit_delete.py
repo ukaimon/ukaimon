@@ -240,6 +240,47 @@ class EditDeleteTests(unittest.TestCase):
         self.assertEqual(batch_item_after["planned_status"], "relink_needed")
         self.assertEqual(self.services.list_measurements(session_id), [])
 
+    def test_exclude_measurement_marks_invalid_with_reason(self) -> None:
+        _, _, session_id, condition_id = self._create_base_records()
+        measurement_id = self.services.create_measurement(
+            {
+                "session_id": session_id,
+                "condition_id": condition_id,
+                "chip_id": "chip-1",
+                "wire_id": "wire-1",
+                "status": "manual",
+                "noise_level": 0.1,
+                "free_memo": "",
+            }
+        )
+        message = self.services.exclude_measurement(measurement_id, "誤測定")
+        measurement = self.services.repository.get_record("measurements", measurement_id)
+        self.assertIn("除外", message)
+        self.assertEqual(measurement["manual_quality_flag"], "invalid")
+        self.assertEqual(measurement["final_quality_flag"], "invalid")
+        self.assertEqual(measurement["exclusion_reason"], "誤測定")
+
+    def test_clear_measurement_exclusion_restores_quality(self) -> None:
+        _, _, session_id, condition_id = self._create_base_records()
+        measurement_id = self.services.create_measurement(
+            {
+                "session_id": session_id,
+                "condition_id": condition_id,
+                "chip_id": "chip-1",
+                "wire_id": "wire-1",
+                "status": "manual",
+                "noise_level": 0.1,
+                "free_memo": "",
+            }
+        )
+        self.services.exclude_measurement(measurement_id, "誤測定")
+        message = self.services.clear_measurement_exclusion(measurement_id)
+        measurement = self.services.repository.get_record("measurements", measurement_id)
+        self.assertIn("解除", message)
+        self.assertIsNone(measurement["manual_quality_flag"])
+        self.assertEqual(measurement["final_quality_flag"], "valid")
+        self.assertEqual(measurement["exclusion_reason"], "")
+
     def test_delete_empty_batch_item_physically_removes_record(self) -> None:
         _, _, session_id, _ = self._create_base_records()
         self.services.generate_batch_plan(session_id, 0.0, "randomized_blocks")

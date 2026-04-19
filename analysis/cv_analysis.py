@@ -8,6 +8,13 @@ import pandas as pd
 from core.models import CycleAnalysisResult, MeasurementAnalysisResult, QualityFlag
 
 
+def _integrate_area(x_values, y_values) -> float:
+    trapezoid = getattr(np, "trapezoid", None)
+    if callable(trapezoid):
+        return float(trapezoid(y_values, x_values))
+    return float(np.trapz(y_values, x_values))
+
+
 def _split_cv_cycles(dataframe: pd.DataFrame) -> list[pd.DataFrame]:
     if len(dataframe) < 4:
         return [dataframe]
@@ -37,6 +44,10 @@ def _split_cv_cycles(dataframe: pd.DataFrame) -> list[pd.DataFrame]:
         else:
             cycles.append(half_cycles[index])
     return cycles or [dataframe]
+
+
+def split_cv_cycles(dataframe: pd.DataFrame) -> list[pd.DataFrame]:
+    return _split_cv_cycles(dataframe)
 
 
 def analyze_cv_curve(
@@ -75,7 +86,7 @@ def analyze_cv_curve(
                 reduction_peak_current_a=reduction_peak_current,
                 reduction_peak_potential_v=reduction_peak_potential,
                 delta_ep_v=abs(oxidation_peak_potential - reduction_peak_potential),
-                integrated_area=float(np.trapz(cycle_df["current_a"], cycle_df["potential_v"])),
+                integrated_area=_integrate_area(cycle_df["potential_v"], cycle_df["current_a"]),
                 quality_flag=QualityFlag.VALID.value,
             )
         )

@@ -89,13 +89,14 @@ class _IdsCreatedHandler(FileSystemEventHandler):  # type: ignore[misc]
     def __init__(self, callback: Callable[[Path], None], target_extensions: list[str]) -> None:
         super().__init__()
         self.callback = callback
-        self.target_extensions = {extension.lower() for extension in target_extensions}
+        self.target_extensions = tuple(extension.lower() for extension in target_extensions)
 
     def on_created(self, event) -> None:  # pragma: no cover - watchdog integration
         if getattr(event, "is_directory", False):
             return
         path = Path(event.src_path)
-        if path.suffix.lower() not in self.target_extensions:
+        normalized_name = path.name.lower()
+        if not any(normalized_name.endswith(extension) for extension in self.target_extensions):
             return
         time.sleep(0.2)
         self.callback(path)
@@ -119,7 +120,9 @@ class IdsWatchCoordinator:
         self.watch_folder.mkdir(parents=True, exist_ok=True)
         handler = _IdsCreatedHandler(self.callback, self.target_extensions)
         self.observer = Observer()
-        self.observer.schedule(handler, str(self.watch_folder), recursive=False)
+        # IviumSoft stores measurements inside per-project subfolders, so we
+        # watch recursively to keep working when the active project changes.
+        self.observer.schedule(handler, str(self.watch_folder), recursive=True)
         self.observer.start()
         LOGGER.info("Started ids watcher: %s", self.watch_folder)
 

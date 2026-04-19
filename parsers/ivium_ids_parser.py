@@ -127,12 +127,28 @@ def parse_ids_file(file_path: str | Path) -> ParsedMeasurementData:
     if not blocks:
         raise ValueError(f"数値データブロックを検出できませんでした: {file_path}")
 
-    selected_block = max(blocks, key=lambda block: (int(block["row_count"]), int(block["line_index"])))
-    detected_columns = detect_standard_columns(selected_block["dataframe"])  # type: ignore[arg-type]
-    standardized_dataframe, standardized_columns = _standardize_dataframe(
-        selected_block["dataframe"],  # type: ignore[arg-type]
-        detected_columns,
-    )
+    standardized_blocks: list[dict[str, object]] = []
+    for block in blocks:
+        detected_columns = detect_standard_columns(block["dataframe"])  # type: ignore[arg-type]
+        standardized_dataframe, standardized_columns = _standardize_dataframe(
+            block["dataframe"],  # type: ignore[arg-type]
+            detected_columns,
+        )
+        standardized_blocks.append(
+            {
+                "block_index": block["block_index"],
+                "line_index": block["line_index"],
+                "row_count": len(standardized_dataframe),
+                "header_lines": block["header_lines"],
+                "metadata": dict(block["metadata"]),  # type: ignore[arg-type]
+                "dataframe": standardized_dataframe,
+                "detected_columns": standardized_columns,
+            }
+        )
+
+    selected_block = max(standardized_blocks, key=lambda block: (int(block["row_count"]), int(block["line_index"])))
+    standardized_dataframe = selected_block["dataframe"]  # type: ignore[assignment]
+    standardized_columns = selected_block["detected_columns"]  # type: ignore[assignment]
     header_lines = selected_block["header_lines"]  # type: ignore[assignment]
     metadata = dict(selected_block["metadata"])  # type: ignore[arg-type]
     metadata["available_blocks"] = [
@@ -142,7 +158,7 @@ def parse_ids_file(file_path: str | Path) -> ParsedMeasurementData:
             "method": block["metadata"].get("Method"),
             "starttime": block["metadata"].get("starttime_iso", block["metadata"].get("starttime")),
         }
-        for block in blocks
+        for block in standardized_blocks
     ]
     metadata["parser_recovered"] = not any(is_primary_data_marker(line) for line in lines)
     return ParsedMeasurementData(
@@ -151,5 +167,5 @@ def parse_ids_file(file_path: str | Path) -> ParsedMeasurementData:
         data=standardized_dataframe,
         detected_columns=standardized_columns,
         source_file_path=str(Path(file_path).resolve()),
-        data_blocks=metadata["available_blocks"],
+        data_blocks=standardized_blocks,
     )

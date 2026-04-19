@@ -9,6 +9,11 @@ from pathlib import Path
 class AppConfig:
     watch_folder: str = "idsサンプル"
     output_folder: str = "data"
+    iviumsoft_exe_path: str = ""
+    ivium_method_template_path: str = ""
+    ivium_device_serial: str = ""
+    ivium_result_timeout_sec: float = 180.0
+    ivium_poll_interval_sec: float = 1.0
     target_extensions: list[str] = field(default_factory=lambda: [".ids"])
     parser_type: str = "ivium_ids"
     representative_cycle_rule: str = "Cycle1"
@@ -41,6 +46,11 @@ class AppConfig:
         return {
             "watch_folder": self.watch_folder,
             "output_folder": self.output_folder,
+            "iviumsoft_exe_path": self.iviumsoft_exe_path,
+            "ivium_method_template_path": self.ivium_method_template_path,
+            "ivium_device_serial": self.ivium_device_serial,
+            "ivium_result_timeout_sec": self.ivium_result_timeout_sec,
+            "ivium_poll_interval_sec": self.ivium_poll_interval_sec,
             "target_extensions": self.target_extensions,
             "parser_type": self.parser_type,
             "representative_cycle_rule": self.representative_cycle_rule,

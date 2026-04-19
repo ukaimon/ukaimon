@@ -1,6 +1,11 @@
 {
   "watch_folder": "idsサンプル",
   "output_folder": "data",
+  "iviumsoft_exe_path": "",
+  "ivium_method_template_path": "",
+  "ivium_device_serial": "",
+  "ivium_result_timeout_sec": 180.0,
+  "ivium_poll_interval_sec": 1.0,
   "target_extensions": [
     ".ids"
   ],

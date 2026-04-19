@@ -51,13 +51,28 @@ class MipUsageTab(ttk.Frame):
             group.grid(row=0, column=column_index, sticky="nsew", padx=(0, 6 if column_index < len(MIP_USAGE_FIELD_GROUPS) - 1 else 0))
             for row_index, spec in enumerate(specs):
                 ttk.Label(group, text=spec.label).grid(row=row_index, column=0, sticky="w", padx=6, pady=4)
-                ttk.Entry(group, textvariable=self.detail_vars[spec.key], width=14).grid(
-                    row=row_index,
-                    column=1,
-                    sticky="w",
-                    padx=(0, 6),
-                    pady=4,
-                )
+                if spec.choices:
+                    ttk.Combobox(
+                        group,
+                        textvariable=self.detail_vars[spec.key],
+                        values=spec.choices,
+                        state="normal",
+                        width=24,
+                    ).grid(
+                        row=row_index,
+                        column=1,
+                        sticky="we",
+                        padx=(0, 6),
+                        pady=4,
+                    )
+                else:
+                    ttk.Entry(group, textvariable=self.detail_vars[spec.key], width=14).grid(
+                        row=row_index,
+                        column=1,
+                        sticky="w",
+                        padx=(0, 6),
+                        pady=4,
+                    )
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", padx=12)
@@ -66,12 +81,18 @@ class MipUsageTab(ttk.Frame):
         ttk.Button(actions, text="選択を複製", command=self._duplicate_selected).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="削除", command=self._delete_selected).pack(side="left", padx=(6, 0))
 
-        self.tree_columns = ("mip_usage_id", "mip_id", "cp_preparation_date", "coating_date", "operator", "note")
+        self.tree_columns = ("mip_usage_id", "mip_id", "cp_preparation_date", "coating_date", "chip_type", "operator", "note")
         self.tree = ttk.Treeview(self, columns=self.tree_columns, show="headings", height=12)
-        headings = ["使用 ID", "MIP ID", "CP 調製日", "塗布日", "担当者", "メモ"]
+        headings = ["使用 ID", "MIP ID", "CP 調製日", "塗布日", "チップ種類", "担当者", "メモ"]
         for column, heading in zip(self.tree_columns, headings):
             self.tree.heading(column, text=heading)
-            self.tree.column(column, width=140 if column != "note" else 260)
+            if column == "note":
+                width = 220
+            elif column == "chip_type":
+                width = 180
+            else:
+                width = 140
+            self.tree.column(column, width=width)
         self.tree.pack(fill="both", expand=True, padx=12, pady=12)
         enable_bulk_tree_actions(self.tree)
         self.tree.bind("<Double-1>", self._handle_tree_double_click)
@@ -209,6 +230,7 @@ class MipUsageTab(ttk.Frame):
                     row["mip_id"],
                     row.get("cp_preparation_date", ""),
                     row.get("coating_date", ""),
+                    row.get("chip_type", ""),
                     row.get("operator", ""),
                     row.get("note", ""),
                 ),

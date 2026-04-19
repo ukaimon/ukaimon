@@ -74,3 +74,26 @@ class MeanVoltammogramResult:
     source_measurement_ids: list[str]
     interpolation_method: str
     interpolation_points: int
+
+
+@dataclass(slots=True)
+class IviumRunState:
+    status: str = "idle"
+    batch_item_id: str = ""
+    session_id: str = ""
+    condition_id: str = ""
+    condition_label: str = ""
+    rep_no: int = 0
+    method_name: str = ""
+    method_file_path: str = ""
+    source_file_path: str = ""
+    source_file_type: str = ""
+    imported_measurement_id: str = ""
+    message: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    completed_at: str = ""
+    device_status_code: int | None = None
+    points_collected: int = 0
+    device_serial: str = ""
+    log_lines: list[str] = field(default_factory=list)

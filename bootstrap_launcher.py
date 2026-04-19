@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,27 @@ REQUIRED_MODULES = (
 
 def project_root() -> Path:
     return Path(__file__).resolve().parent
+
+
+def prepare_bootstrap_temp(root: Path) -> Path:
+    temp_dir = root / ".bootstrap_tmp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["TMP"] = str(temp_dir)
+    os.environ["TEMP"] = str(temp_dir)
+    return temp_dir
+
+
+def safe_gui_workdir(root: Path) -> Path:
+    # tkinter/Tcl can fail to initialize when the current working directory contains
+    # non-ASCII characters on some Windows Python installs. Launch the GUI from the
+    # drive root while keeping all project paths absolute.
+    drive_root = Path(root.anchor) if root.anchor else None
+    if drive_root and drive_root.exists():
+        return drive_root
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    if system_root.exists():
+        return system_root
+    return Path.cwd()
 
 
 def venv_python_path(root: Path) -> Path:
@@ -61,7 +83,7 @@ def venv_is_usable(venv_python: Path, root: Path) -> bool:
     if not venv_python.exists():
         return False
     probe = subprocess.run(
-        [str(venv_python), "-c", "import sys"],
+        [str(venv_python), "-c", "import sys, pip"],
         cwd=root,
         check=False,
         stdout=subprocess.DEVNULL,
@@ -107,13 +129,18 @@ def ensure_dependencies(root: Path, venv_python: Path, modules: Iterable[str] = 
 
 
 def launch_app(root: Path, venv_python: Path) -> int:
-    return run_command([str(venv_python), str(root / "app.py")], root, check=False).returncode
+    return run_command(
+        [str(venv_python), str(root / "app.py")],
+        safe_gui_workdir(root),
+        check=False,
+    ).returncode
 
 
 def main() -> int:
     root = project_root()
     try:
         ensure_python_version()
+        prepare_bootstrap_temp(root)
         venv_python = ensure_venv(root)
         ensure_dependencies(root, venv_python)
         return launch_app(root, venv_python)

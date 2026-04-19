@@ -307,6 +307,29 @@ class ElectrochemRepository:
             ),
         )
 
+    def requeue_running_batch_items(self, session_id: str | None = None) -> int:
+        conditions = ["planned_status = ?", "COALESCE(is_deleted, 0) = 0"]
+        params: list[Any] = [PlannedStatus.RUNNING.value]
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+        count_row = self.database.fetch_one(
+            f"SELECT COUNT(*) AS value FROM batch_plan_items WHERE {' AND '.join(conditions)}",
+            tuple(params),
+        )
+        pending_count = int((count_row or {}).get("value", 0))
+        if pending_count == 0:
+            return 0
+        self.database.execute(
+            f"""
+            UPDATE batch_plan_items
+            SET planned_status = ?, updated_at = ?
+            WHERE {' AND '.join(conditions)}
+            """,
+            (PlannedStatus.WAITING.value, now_iso(), *params),
+        )
+        return pending_count
+
     def update_batch_item_status(
         self,
         batch_item_id: str,
@@ -802,6 +825,19 @@ class ElectrochemRepository:
         return self.database.fetch_one(
             "SELECT * FROM measurement_conditions WHERE measurement_id = ? ORDER BY created_at DESC LIMIT 1",
             (measurement_id,),
+        )
+
+    def get_measurement_by_raw_file_path(self, raw_file_path: str) -> dict[str, Any] | None:
+        return self.database.fetch_one(
+            """
+            SELECT *
+            FROM measurements
+            WHERE raw_file_path = ?
+              AND COALESCE(is_deleted, 0) = 0
+            ORDER BY measured_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (raw_file_path,),
         )
 
     def get_export_frames(self, session_id: str) -> dict[str, pd.DataFrame]:

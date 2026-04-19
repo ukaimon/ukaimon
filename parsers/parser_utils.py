@@ -22,18 +22,52 @@ HEADER_KEYWORDS = {
 
 NUMERIC_TOKEN_PATTERN = re.compile(r"^[\-\+]?(?:\d+(?:[\,\.]\d*)?|[\,\.]\d+)(?:[Ee][\-\+]?\d+)?$")
 
+EXPECTED_TEXT_MARKERS = (
+    "Version=",
+    "Method=",
+    "starttime=",
+    "Current Range=",
+    "Scanrate=",
+    "E start=",
+)
+
+
+def _score_decoded_text(text: str) -> tuple[int, int, int]:
+    marker_score = sum(text.count(marker) for marker in EXPECTED_TEXT_MARKERS)
+    line_score = text.count("\n")
+    numeric_like_score = len(re.findall(r"[\-\+]?\d+(?:\.\d+)?E[\-\+]?\d+", text))
+    return marker_score, numeric_like_score, line_score
+
+
+def _decode_ids_text(raw_bytes: bytes) -> str:
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        return raw_bytes.decode("utf-8-sig", errors="ignore")
+    if raw_bytes.startswith(b"\xff\xfe"):
+        return raw_bytes.decode("utf-16-le", errors="ignore")
+    if raw_bytes.startswith(b"\xfe\xff"):
+        return raw_bytes.decode("utf-16-be", errors="ignore")
+
+    candidates: list[tuple[tuple[int, int, int], str]] = []
+    for encoding, errors in (
+        ("utf-8-sig", "strict"),
+        ("cp932", "ignore"),
+        ("utf-8", "ignore"),
+        ("latin1", "strict"),
+    ):
+        try:
+            text = raw_bytes.decode(encoding, errors=errors)
+        except UnicodeDecodeError:
+            continue
+        candidates.append((_score_decoded_text(text), text))
+    if not candidates:
+        return raw_bytes.decode("latin1", errors="ignore")
+    return max(candidates, key=lambda candidate: candidate[0])[1]
+
 
 def read_ids_lines(file_path: str | Path) -> list[str]:
     path = Path(file_path)
     raw_bytes = path.read_bytes()
-    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp932", "utf-8", "latin1"):
-        try:
-            text = raw_bytes.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        text = raw_bytes.decode("utf-8", errors="replace")
+    text = _decode_ids_text(raw_bytes)
 
     for marker in ("\r\n", "\r", "\x00", "\x1c", "\x1e"):
         text = text.replace(marker, "\n")
@@ -96,16 +130,30 @@ def is_numeric_row(line: str) -> bool:
 
 
 def parse_numeric_row(line: str) -> list[float] | None:
-    tokens = _split_tokens(line)
-    if len(tokens) < 2:
+    stripped = line.strip()
+    if not stripped:
         return None
-    values: list[float] = []
-    for token in tokens:
-        parsed = _parse_float_token(token)
-        if parsed is None:
-            return None
-        values.append(parsed)
-    return values if len(values) >= 2 else None
+
+    delimiter_patterns = [
+        r"[\t;]+",
+        r"[\t ]+",
+        r"\s{2,}",
+        r",(?=\s*[\-\+]?\d)",
+    ]
+    for pattern in delimiter_patterns:
+        tokens = [token.strip() for token in re.split(pattern, stripped) if token.strip()]
+        if len(tokens) < 2:
+            continue
+        values: list[float] = []
+        for token in tokens:
+            parsed = _parse_float_token(token)
+            if parsed is None:
+                values = []
+                break
+            values.append(parsed)
+        if len(values) >= 2:
+            return values
+    return None
 
 
 def collect_numeric_block(

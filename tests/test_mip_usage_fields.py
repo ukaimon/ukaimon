@@ -40,7 +40,9 @@ class MipUsageFieldTests(unittest.TestCase):
     def _assert_usage_defaults(self, row: dict[str, object]) -> None:
         for key, default_value in MIP_USAGE_FIELD_DEFAULTS.items():
             actual_value = row[key]
-            if "." in default_value:
+            if default_value == "":
+                self.assertEqual(str(actual_value or ""), "")
+            elif "." in default_value:
                 self.assertAlmostEqual(float(actual_value), float(default_value))
             else:
                 self.assertEqual(int(float(actual_value)), int(default_value))
@@ -142,9 +144,12 @@ class MipUsageFieldTests(unittest.TestCase):
                 pass
 
     def test_with_mip_usage_field_defaults_preserves_overrides(self) -> None:
-        normalized = with_mip_usage_field_defaults({"kneading_count": "7", "coating_height": "7.2"})
+        normalized = with_mip_usage_field_defaults(
+            {"kneading_count": "7", "coating_height": "7.2", "chip_type": "プリテック銀インクチップ"}
+        )
         self.assertEqual(normalized["kneading_count"], "7")
         self.assertEqual(normalized["coating_height"], "7.2")
+        self.assertEqual(normalized["chip_type"], "プリテック銀インクチップ")
         self.assertEqual(normalized["coating_speed_mm_min"], MIP_USAGE_FIELD_DEFAULTS["coating_speed_mm_min"])
 
 

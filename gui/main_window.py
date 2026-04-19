@@ -16,6 +16,7 @@ from gui.navigation import RECORD_TYPE_TO_TAB_TITLE
 from gui.restore_tab import RestoreTab
 from gui.session_detail_tab import SessionDetailTab
 from gui.session_tab import SessionTab
+from gui.theme import apply_app_theme
 from gui.watcher_tab import WatcherTab
 
 
@@ -24,14 +25,20 @@ class MainWindow:
         self.services = services
         self.root = tk.Tk()
         self.root.title("電気化学実験データ管理 GUI")
-        self.root.geometry("1500x960")
+        self.root.geometry("1680x1040")
+        self.root.minsize(1380, 880)
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            pass
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        style = ttk.Style(self.root)
-        style.configure("TLabel", font=("Yu Gothic UI", 10))
-        style.configure("TButton", font=("Yu Gothic UI", 10))
+        apply_app_theme(self.root)
 
-        self.notebook = ttk.Notebook(self.root)
+        shell = ttk.Frame(self.root, style="Card.TFrame", padding=10)
+        shell.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.notebook = ttk.Notebook(shell)
         self.notebook.pack(fill="both", expand=True)
 
         self.tabs = [
@@ -74,7 +81,7 @@ class MainWindow:
                 tab.refresh_tab()
 
     def _on_close(self) -> None:
-        self.services.stop_watcher()
+        self.services.shutdown()
         self.root.destroy()
 
     def run(self) -> None:

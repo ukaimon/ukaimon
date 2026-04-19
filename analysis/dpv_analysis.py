@@ -6,6 +6,13 @@ import pandas as pd
 from core.models import MeasurementAnalysisResult, QualityFlag
 
 
+def _integrate_area(x_values, y_values) -> float:
+    trapezoid = getattr(np, "trapezoid", None)
+    if callable(trapezoid):
+        return float(trapezoid(y_values, x_values))
+    return float(np.trapz(y_values, x_values))
+
+
 def analyze_dpv_curve(
     dataframe: pd.DataFrame,
     baseline_correction: bool = True,
@@ -70,7 +77,7 @@ def analyze_dpv_curve(
         reduction_peak_current_a=None,
         reduction_peak_potential_v=None,
         delta_ep_v=None,
-        integrated_area=float(np.trapz(signal, potential)) if len(signal) > 1 else None,
+        integrated_area=_integrate_area(potential, signal) if len(signal) > 1 else None,
         quality_flag=quality_flag,
         analysis_method="DPV",
         note=note,

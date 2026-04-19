@@ -2,12 +2,16 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.bootstrap_tmp/
+.pytest_cache/
+pytest-cache-files-*/
 logs/
 *.log
 *.ids
 *.sqlite3
 *.db
 database/*.db
+data/
 
 data/sessions/*/raw/
 data/sessions/*/processed/
@@ -18,3 +22,4 @@ data/sessions/*/report/
 data/cross_reports/
 config/local_config.json
 vendor/wheels/
+解析/*/

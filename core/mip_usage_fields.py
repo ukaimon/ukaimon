@@ -10,6 +10,7 @@ class MipUsageFieldSpec:
     label: str
     default_value: str
     sql_definition: str
+    choices: tuple[str, ...] = ()
 
 
 MIP_USAGE_FIELD_GROUPS: tuple[tuple[str, tuple[MipUsageFieldSpec, ...]], ...] = (
@@ -22,8 +23,15 @@ MIP_USAGE_FIELD_GROUPS: tuple[tuple[str, tuple[MipUsageFieldSpec, ...]], ...] = 
     (
         "塗布",
         (
+            MipUsageFieldSpec(
+                "chip_type",
+                "チップ種類",
+                "",
+                "TEXT DEFAULT ''",
+                ("プリテック銀インクチップ", "ニューロングくびれありチップ"),
+            ),
             MipUsageFieldSpec("coating_speed_mm_min", "塗布速度 [mm/min]", "2000", "REAL DEFAULT 2000"),
-            MipUsageFieldSpec("coating_passes", "塗布回数 [回]", "5", "INTEGER DEFAULT 5"),
+            MipUsageFieldSpec("coating_passes", "塗布回数 [回]", "3", "INTEGER DEFAULT 3"),
             MipUsageFieldSpec("coating_height", "塗布高さ", "6.8", "REAL DEFAULT 6.8"),
         ),
     ),
